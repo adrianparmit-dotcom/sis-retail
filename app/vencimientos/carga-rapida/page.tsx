@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -34,6 +34,14 @@ interface Confirmado {
 }
 
 export default function CargaRapidaPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-zinc-400">Cargando...</div>}>
+      <CargaRapidaContent />
+    </Suspense>
+  )
+}
+
+function CargaRapidaContent() {
   const searchParams = useSearchParams()
   const initialSku = searchParams.get('sku') ?? ''
 
