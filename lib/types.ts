@@ -16,9 +16,29 @@ export interface ProductoCompra {
   ventas_90d: number
   vel_diaria: number
   dias_cobertura: number
+  frecuencia_proveedor: number
+  moq: number
+  multiplo: number
+  lead_time_dias: number
+  costo_estimado: number | null
+  // Intelligent buyer algorithm fields
+  demanda_estimada: number
+  necesidad_base: number
+  compra_calculada: number
+  vida_util_promedio: number | null
+  cobertura_maxima: number | null
+  qty_max_vencimiento: number | null
+  tiene_quiebre: boolean
+  motivos: string | null
+  nivel_confianza: 'alto' | 'medio' | 'bajo' | 'sin_datos'
   sugerencia_compra: number
+  es_granel: boolean
+  sugerencia_kg: number | null
   inversion_sugerida: number
   dux_sync_at: string | null
+  proveedor_nombre: string | null
+  location_id: string | null
+  location_nombre: string | null
 }
 
 // Used by v_vencimientos_fefo
@@ -109,4 +129,71 @@ export interface ParsedInvoice {
   fecha: string
   proveedor: string
   items: ParsedInvoiceItem[]
+}
+
+// ─── Invoice reception (PDF-based) ───────────────────────────────
+
+export type MatchConfidence = 'exacto' | 'sku_map' | 'nombre' | 'manual' | 'sin_match'
+export type EstadoRecepcion = 'ok' | 'faltante' | 'extra' | 'vencido_llegada'
+export type ProveedorType   = 'diet' | 'ankas' | 'epn' | 'otro'
+
+export interface InvoiceLineItem {
+  // From supplier invoice
+  sku_proveedor         : string      // supplier code or barcode
+  descripcion_proveedor : string      // supplier description
+  cantidad              : number      // qty on invoice
+  costo_unitario        : number      // net unit cost after bonification (IMPORTE / CANT)
+  iva_porcentaje        : number      // 21 or 10.5
+  precio_venta_sugerido : number      // costo_unitario × (1 + margen) — filled after matching
+
+  // Matched product in SOHO OS
+  producto_id           ?: string
+  producto_sku          ?: string
+  producto_nombre       ?: string
+  producto_precio_actual?: number
+  producto_id_dux       ?: number     // proveedor_id_dux from productos table
+  match_confidence      : MatchConfidence
+
+  // User fills during review
+  cantidad_recibida : number
+  fecha_vencimiento : string          // YYYY-MM-DD
+  estado_recepcion  : EstadoRecepcion
+
+  // Blister / fraccionamiento
+  es_blister          : boolean
+  unidades_por_blister: number        // how many individual units per blister box
+
+  // Granel (bulk by weight)
+  // Reception is saved as draft; quantities are updated as fractionation happens.
+  // Vencimientos are NOT created at confirmation — fraccionamiento creates them.
+  es_granel: boolean
+}
+
+export interface ParsedFactura {
+  proveedor_nombre  : string
+  proveedor_type    : ProveedorType
+  nro_comprobante   : string
+  fecha             : string          // DD/MM/YYYY from invoice
+  items             : InvoiceLineItem[]
+}
+
+export interface SkuMapEntry {
+  id                   : string
+  proveedor_nombre     : string
+  sku_proveedor        : string
+  descripcion_proveedor: string | null
+  producto_id          : string | null
+}
+
+export interface ReposicionItem {
+  producto_id: string
+  sku: string
+  nombre: string | null
+  categoria: string | null
+  stock_dux: number
+  soho1_local: number
+  soho1_pieza: number
+  soho2_local: number
+  soho2_deposito: number
+  ventas_prom_dia: number
 }
