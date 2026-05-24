@@ -86,7 +86,7 @@ export function parseDuxInvoice(text: string): ParsedInvoice {
       skipUntilNewComp = false
       items.push({
         ...parsed,
-        cantidad_recibida: parsed.cantidad,
+        cantidad_recibida: 0,
         fecha_vencimiento: '',
         estado_recepcion: 'ok',
       })
