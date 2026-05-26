@@ -388,13 +388,32 @@ export default function RecepcionFacturaPage() {
     if (!file) return
     setLoadingPdf(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await fetch('/api/parse-pdf', { method: 'POST', body: fd })
-      if (!res.ok) { const j = await res.json(); throw new Error(j.error ?? 'Error') }
-      const { text } = await res.json() as { text: string }
+      // Client-side PDF text extraction using pdfjs-dist (no server needed)
+      const pdfjsLib = await import('pdfjs-dist')
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+
+      const arrayBuffer = await file.arrayBuffer()
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+      const pageTexts: string[] = []
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i)
+        const content = await page.getTextContent()
+        const lineMap = new Map<number, string[]>()
+        for (const item of content.items) {
+          if (!('str' in item)) continue
+          const y = Math.round((item as { transform: number[] }).transform[5])
+          if (!lineMap.has(y)) lineMap.set(y, [])
+          lineMap.get(y)!.push((item as { str: string }).str)
+        }
+        const lines = [...lineMap.entries()]
+          .sort((a, b) => b[0] - a[0])
+          .map(([, words]) => words.join(' '))
+        pageTexts.push(lines.join('\n'))
+      }
+      const text = pageTexts.join('\n')
       setTexto(text)
-      // Auto-parsear inmediatamente
+
       const tipo = tipoProveedor === 'auto' ? detectProveedorType(text) : tipoProveedor
       const parsed = parseFactura(text, tipo)
       const matched = parsed.items.map(item => matchItem(item, parsed.proveedor_nombre))
