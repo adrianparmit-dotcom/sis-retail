@@ -399,16 +399,29 @@ export default function RecepcionFacturaPage() {
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i)
         const content = await page.getTextContent()
-        const lineMap = new Map<number, string[]>()
+
+        // Collect all text items with their X,Y positions
+        type TextItem = { x: number; y: number; str: string }
+        const textItems: TextItem[] = []
         for (const item of content.items) {
-          if (!('str' in item)) continue
-          const y = Math.round((item as { transform: number[] }).transform[5])
-          if (!lineMap.has(y)) lineMap.set(y, [])
-          lineMap.get(y)!.push((item as { str: string }).str)
+          if (!('str' in item) || !(item as { str: string }).str.trim()) continue
+          const t = (item as { transform: number[]; str: string }).transform
+          textItems.push({ x: t[4], y: t[5], str: (item as { str: string }).str })
         }
-        const lines = [...lineMap.entries()]
-          .sort((a, b) => b[0] - a[0])
-          .map(([, words]) => words.join(' '))
+
+        // Cluster by Y with tolerance ±3pt, then sort each cluster by X
+        const clusters: { y: number; items: TextItem[] }[] = []
+        for (const ti of textItems) {
+          const found = clusters.find(c => Math.abs(c.y - ti.y) <= 3)
+          if (found) { found.items.push(ti); found.y = (found.y + ti.y) / 2 }
+          else clusters.push({ y: ti.y, items: [ti] })
+        }
+        // Sort clusters top→bottom (descending Y in PDF coords), items left→right
+        clusters.sort((a, b) => b.y - a.y)
+        const lines = clusters.map(c => {
+          c.items.sort((a, b) => a.x - b.x)
+          return c.items.map(ti => ti.str).join(' ')
+        })
         pageTexts.push(lines.join('\n'))
       }
       const text = pageTexts.join('\n')
