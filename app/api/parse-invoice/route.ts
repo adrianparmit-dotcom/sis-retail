@@ -7,7 +7,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+// Strip BOM (﻿) that can sneak in from env vars copied from certain editors/terminals
+const rawKey = (process.env.ANTHROPIC_API_KEY ?? '').replace(/^﻿/, '').trim()
+const client = new Anthropic({ apiKey: rawKey })
 
 const SYSTEM_PROMPT = `Sos un sistema de extracción de datos de facturas de proveedores para una dietética/naturista argentina.
 Extraé los datos de la factura y respondé ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown, sin explicaciones.`
