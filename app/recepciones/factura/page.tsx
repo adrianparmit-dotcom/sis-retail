@@ -227,6 +227,8 @@ export default function RecepcionFacturaPage() {
   const [duxError, setDuxError]               = useState<string | null>(null)
   const [priceExcelUrl, setPriceExcelUrl]     = useState<string | null>(null)
   const [priceExcelCount, setPriceExcelCount] = useState(0)
+  const [loadingPdf, setLoadingPdf]           = useState(false)
+  const pdfInputRef                           = useRef<HTMLInputElement>(null)
 
   // ── Load products + SKU map ──────────────────────────────────
 
@@ -380,6 +382,32 @@ export default function RecepcionFacturaPage() {
   }
 
   // ── Step 1 ────────────────────────────────────────────────────
+
+  async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLoadingPdf(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/parse-pdf', { method: 'POST', body: fd })
+      if (!res.ok) { const j = await res.json(); throw new Error(j.error ?? 'Error') }
+      const { text } = await res.json() as { text: string }
+      setTexto(text)
+      // Auto-parsear inmediatamente
+      const tipo = tipoProveedor === 'auto' ? detectProveedorType(text) : tipoProveedor
+      const parsed = parseFactura(text, tipo)
+      const matched = parsed.items.map(item => matchItem(item, parsed.proveedor_nombre))
+      setFactura(parsed)
+      setItems(matched)
+      setStep('review')
+    } catch (err) {
+      alert('Error al leer el PDF: ' + (err as Error).message)
+    } finally {
+      setLoadingPdf(false)
+      if (pdfInputRef.current) pdfInputRef.current.value = ''
+    }
+  }
 
   function handleParsear() {
     if (!texto.trim()) return
@@ -694,9 +722,35 @@ export default function RecepcionFacturaPage() {
           <h1 className="text-xl font-semibold text-zinc-900">Nueva recepción desde factura</h1>
         </div>
 
-        <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-          <p className="font-medium mb-0.5">📄 Copiá el texto del PDF de la factura y pegalo abajo.</p>
-          <p className="text-blue-600">Los productos granel arrancan con cantidad 0 — vas actualizando a medida que fraccionás.</p>
+        {/* PDF upload — primary action */}
+        <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 p-6 text-center space-y-3">
+          <p className="text-sm font-medium text-zinc-700">Subí el PDF de la factura directamente</p>
+          <p className="text-xs text-zinc-400">El sistema extrae el texto automáticamente y procesa todo de una vez</p>
+          <input
+            ref={pdfInputRef}
+            type="file"
+            accept=".pdf"
+            className="hidden"
+            onChange={handlePdfUpload}
+          />
+          <Button
+            onClick={() => pdfInputRef.current?.click()}
+            disabled={loadingPdf || loadingProds}
+            size="lg"
+            className="w-full max-w-xs"
+          >
+            {loadingPdf
+              ? <><Loader2 className="animate-spin mr-2" size={16} />Leyendo PDF...</>
+              : loadingProds
+              ? <><Loader2 className="animate-spin mr-2" size={16} />Cargando productos...</>
+              : <>📄 Seleccionar PDF</>}
+          </Button>
+        </div>
+
+        <div className="relative flex items-center gap-3">
+          <div className="flex-1 border-t border-zinc-200" />
+          <span className="text-xs text-zinc-400 shrink-0">o pegá el texto manualmente</span>
+          <div className="flex-1 border-t border-zinc-200" />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
