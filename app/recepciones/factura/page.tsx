@@ -388,53 +388,58 @@ export default function RecepcionFacturaPage() {
     if (!file) return
     setLoadingPdf(true)
     try {
-      // Client-side PDF text extraction using pdfjs-dist (no server needed)
-      const pdfjsLib = await import('pdfjs-dist')
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
-
-      const arrayBuffer = await file.arrayBuffer()
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-      const pageTexts: string[] = []
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i)
-        const content = await page.getTextContent()
-
-        // Collect all text items with their X,Y positions
-        type TextItem = { x: number; y: number; str: string }
-        const textItems: TextItem[] = []
-        for (const item of content.items) {
-          if (!('str' in item) || !(item as { str: string }).str.trim()) continue
-          const t = (item as { transform: number[]; str: string }).transform
-          textItems.push({ x: t[4], y: t[5], str: (item as { str: string }).str })
-        }
-
-        // Cluster by Y with tolerance ±3pt, then sort each cluster by X
-        const clusters: { y: number; items: TextItem[] }[] = []
-        for (const ti of textItems) {
-          const found = clusters.find(c => Math.abs(c.y - ti.y) <= 3)
-          if (found) { found.items.push(ti); found.y = (found.y + ti.y) / 2 }
-          else clusters.push({ y: ti.y, items: [ti] })
-        }
-        // Sort clusters top→bottom (descending Y in PDF coords), items left→right
-        clusters.sort((a, b) => b.y - a.y)
-        const lines = clusters.map(c => {
-          c.items.sort((a, b) => a.x - b.x)
-          return c.items.map(ti => ti.str).join(' ')
-        })
-        pageTexts.push(lines.join('\n'))
+      // Send PDF to Claude API — it reads and extracts structured data directly
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/parse-invoice', { method: 'POST', body: fd })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error((j as { error?: string }).error ?? `Error ${res.status}`)
       }
-      const text = pageTexts.join('\n')
-      setTexto(text)
+      const data = await res.json() as {
+        proveedor: string
+        nro_comprobante: string
+        fecha: string
+        items: Array<{
+          codigo: string
+          descripcion: string
+          cantidad: number
+          costo_unitario: number
+          iva_porcentaje: number
+        }>
+      }
 
-      const tipo = tipoProveedor === 'auto' ? detectProveedorType(text) : tipoProveedor
-      const parsed = parseFactura(text, tipo)
+      // Build ParsedFactura from Claude response
+      const tipo = tipoProveedor === 'auto' ? detectProveedorType(data.proveedor) : tipoProveedor
+      const parsed: import('@/lib/types').ParsedFactura = {
+        proveedor_nombre : data.proveedor,
+        proveedor_type   : tipo === 'otro' ? 'otro' : tipo,
+        nro_comprobante  : data.nro_comprobante ?? '',
+        fecha            : data.fecha ?? '',
+        items            : data.items.map(it => ({
+          sku_proveedor         : it.codigo ?? '',
+          descripcion_proveedor : it.descripcion,
+          cantidad              : it.cantidad,
+          costo_unitario        : it.costo_unitario,
+          iva_porcentaje        : it.iva_porcentaje ?? 21,
+          precio_venta_sugerido : 0,
+          match_confidence      : 'sin_match' as const,
+          cantidad_recibida     : it.cantidad,
+          fecha_vencimiento     : '',
+          estado_recepcion      : 'ok' as const,
+          es_blister            : /^blister\s/i.test(it.descripcion),
+          unidades_por_blister  : 1,
+          es_granel             : false,
+        })),
+      }
+
+      setTexto(JSON.stringify(data, null, 2))
       const matched = parsed.items.map(item => matchItem(item, parsed.proveedor_nombre))
       setFactura(parsed)
       setItems(matched)
       setStep('review')
     } catch (err) {
-      alert('Error al leer el PDF: ' + (err as Error).message)
+      alert('Error al procesar el PDF: ' + (err as Error).message)
     } finally {
       setLoadingPdf(false)
       if (pdfInputRef.current) pdfInputRef.current.value = ''
