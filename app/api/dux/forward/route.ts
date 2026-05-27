@@ -15,14 +15,15 @@ const SYNC_SECRET = process.env.SYNC_SECRET ?? 'soho-internal-2026'
 export const runtime = 'edge'
 
 export async function GET(req: NextRequest) {
-  const secret = req.headers.get('x-sync-secret') ?? ''
+  const { searchParams } = new URL(req.url)
+  // Accept secret via header OR query param (header may be stripped by some proxies)
+  const secret = req.headers.get('x-sync-secret') ?? searchParams.get('_s') ?? ''
   if (!SYNC_SECRET || secret !== SYNC_SECRET) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    return new Response(JSON.stringify({ error: 'Unauthorized', hint: 'x-sync-secret header or _s param required' }), {
       status: 401, headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  const { searchParams } = new URL(req.url)
   const path = searchParams.get('path') ?? ''
   if (!path || !path.startsWith('/')) {
     return new Response(JSON.stringify({ error: 'Missing path param' }), {
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
 
   const duxUrl = new URL(`${DUX_BASE}${path}`)
   searchParams.forEach((v, k) => {
-    if (k !== 'path') duxUrl.searchParams.set(k, v)
+    if (k !== 'path' && k !== '_s') duxUrl.searchParams.set(k, v)
   })
 
   const duxRes = await fetch(duxUrl.toString(), {
