@@ -59,6 +59,7 @@ interface Producto {
   sku              : string
   nombre           : string | null
   codigo_barras    : string | null
+  codigo_externo   : string | null
   precio_venta     : number | null
   costo            : number | null
   proveedor_id_dux : number | null
@@ -237,7 +238,7 @@ export default function RecepcionFacturaPage() {
       setLoadingProds(true)
       const [prodRes, skuRes] = await Promise.all([
         supabase.from('productos')
-          .select('id,sku,nombre,codigo_barras,precio_venta,costo,proveedor_id_dux,categoria')
+          .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria')
           .order('nombre'),
         supabase.from('proveedor_sku_map').select('*'),
       ])
@@ -312,6 +313,10 @@ export default function RecepcionFacturaPage() {
     new Map(productos.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p]))
   , [productos])
 
+  const codigoExternoMap = useMemo(() =>
+    new Map(productos.filter(p => p.codigo_externo).map(p => [p.codigo_externo!, p]))
+  , [productos])
+
   const skuProdMap = useMemo(() =>
     new Map(productos.map(p => [p.sku, p]))
   , [productos])
@@ -351,11 +356,15 @@ export default function RecepcionFacturaPage() {
   }
 
   function matchItem(item: InvoiceLineItem, proveedorNombre: string): InvoiceLineItem {
-    // 1. Barcode exact match (EAN13)
+    // 1. Barcode exact match (EAN13 — 13 digits)
     if (item.sku_proveedor && barcodeMap.has(item.sku_proveedor))
       return applyMatch(item, barcodeMap.get(item.sku_proveedor)!, 'exacto')
 
-    // 2. SKU map match
+    // 2. codigo_externo match (supplier's own code stored in Dux)
+    if (item.sku_proveedor && codigoExternoMap.has(item.sku_proveedor))
+      return applyMatch(item, codigoExternoMap.get(item.sku_proveedor)!, 'exacto')
+
+    // 3. proveedor_sku_map match (learned from previous invoices)
     const mapEntry = skuMap.find(
       e => e.proveedor_nombre.toLowerCase() === proveedorNombre.toLowerCase()
         && e.sku_proveedor === item.sku_proveedor
@@ -365,11 +374,11 @@ export default function RecepcionFacturaPage() {
       if (p) return applyMatch(item, p, 'sku_map')
     }
 
-    // 3. Direct SKU match
+    // 4. Direct SKU match (Dux internal code)
     if (item.sku_proveedor && skuProdMap.has(item.sku_proveedor))
       return applyMatch(item, skuProdMap.get(item.sku_proveedor)!, 'exacto')
 
-    // 4. Fuzzy name match
+    // 5. Fuzzy name match
     let best = 0; let bestProd: Producto | null = null
     for (const p of productos) {
       const s = nameMatchScore(item.descripcion_proveedor, p.nombre ?? '')
