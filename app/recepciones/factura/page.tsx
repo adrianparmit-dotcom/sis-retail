@@ -1031,7 +1031,17 @@ export default function RecepcionFacturaPage() {
                       </td>
 
                       {/* IVA */}
-                      <td className="px-2 py-2 text-center text-xs text-zinc-500">{item.iva_porcentaje}%</td>
+                      <td className="px-2 py-2 text-center">
+                        <select
+                          value={item.iva_porcentaje}
+                          onChange={e => updateItem(i, { iva_porcentaje: parseFloat(e.target.value) })}
+                          className="text-xs border border-zinc-200 rounded px-1 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer"
+                        >
+                          <option value={21}>21%</option>
+                          <option value={10.5}>10.5%</option>
+                          <option value={0}>0%</option>
+                        </select>
+                      </td>
 
                       {/* Type badge */}
                       <td className="px-2 py-2 text-center">
