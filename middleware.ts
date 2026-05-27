@@ -2,7 +2,7 @@ import { auth } from '@/auth'
 import { NextResponse } from 'next/server'
 
 // Routes that don't require authentication
-const PUBLIC_PATHS = ['/login', '/api/auth']
+const PUBLIC_PATHS = ['/login', '/api/auth', '/api/dux/forward']
 
 export default auth((req) => {
   const { pathname } = req.nextUrl
