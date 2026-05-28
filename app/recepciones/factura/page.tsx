@@ -19,13 +19,13 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { parseFactura, calcPrecioVenta, nameMatchScore, detectProveedorType } from '@/lib/invoice-parsers'
-import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry } from '@/lib/types'
+import { parseFactura, calcPrecioVenta, detectProveedorType } from '@/lib/invoice-parsers'
+import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { AlertCircle, CheckCircle2, HelpCircle, Download, Loader2, ChevronRight, Save } from 'lucide-react'
+import { CheckCircle2, HelpCircle, Download, Loader2, ChevronRight, Save } from 'lucide-react'
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -42,14 +42,6 @@ const PROVEEDOR_LABELS: Record<ProveedorType | 'auto', string> = {
   ankas: 'Ankas del Sur',
   epn  : 'EPN / Mayorista',
   otro : 'Otro (manual)',
-}
-
-const CONFIDENCE_BADGE: Record<MatchConfidence, { label: string; cls: string }> = {
-  exacto    : { label: '● Exacto',    cls: 'bg-green-100 text-green-700 border-green-300' },
-  sku_map   : { label: '● Mapa SKU',  cls: 'bg-blue-100 text-blue-700 border-blue-300' },
-  nombre    : { label: '◐ Nombre',    cls: 'bg-yellow-100 text-yellow-700 border-yellow-300' },
-  manual    : { label: '✎ Manual',    cls: 'bg-purple-100 text-purple-700 border-purple-300' },
-  sin_match : { label: '✕ Sin match', cls: 'bg-red-100 text-red-700 border-red-300' },
 }
 
 // ── Local types ──────────────────────────────────────────────────
@@ -150,51 +142,252 @@ function DateSelector({ value, onChange }: { value: string; onChange: (v: string
 
 // ── Product search popup ─────────────────────────────────────────
 
-function ProductSearch({ productos, onSelect, onClose }: {
-  productos: Producto[]
-  onSelect: (p: Producto) => void
-  onClose: () => void
+function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onClose }: {
+  productos       : Producto[]
+  initialQuery   ?: string
+  supplierContext?: string
+  onSelect        : (p: Producto) => void
+  onClose         : () => void
+}) {
+  const [q, setQ] = useState(initialQuery ?? '')
+  const [highlightIdx, setHighlightIdx] = useState(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef  = useRef<HTMLDivElement>(null)
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select() }, [])
+
+  // Match by SKU, barcode or name. Pure SKU/barcode matches rank highest.
+  const ranked = useMemo(() => {
+    const query = q.trim().toLowerCase()
+    if (!query) return [] as Producto[]
+    const tokenize = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9áéíóúñ]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
+    const qt = tokenize(query)
+    const ctxTokens = supplierContext ? new Set(tokenize(supplierContext)) : null
+    const scored = productos.map(p => {
+      const sku  = (p.sku ?? '').toLowerCase()
+      const ean  = (p.codigo_barras ?? '').toLowerCase()
+      const name = (p.nombre ?? '').toLowerCase()
+
+      // 1) Exact / prefix SKU or barcode match → top priority
+      if (sku === query || ean === query) return { p, score: 1000 }
+      if (sku.startsWith(query)) return { p, score: 500 }
+      if (ean.startsWith(query)) return { p, score: 400 }
+
+      // 2) Substring in SKU or barcode (handles partial codes)
+      if (sku.includes(query) || ean.includes(query)) return { p, score: 200 }
+
+      // 3) Fall back to name word-overlap (all tokens must appear in name)
+      const allInName = qt.every(t => name.includes(t))
+      if (!allInName) return { p, score: 0 }
+      const tokens = tokenize(p.nombre ?? '')
+      let score = qt.length * 10
+      if (name.startsWith(qt[0])) score += 5
+      if (ctxTokens) for (const t of tokens) if (ctxTokens.has(t)) score += 1
+      return { p, score }
+    }).filter(x => x.score > 0)
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, 30).map(x => x.p)
+  }, [productos, q, supplierContext])
+
+  function handleKey(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') { onClose(); return }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, ranked.length - 1)) }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)) }
+    if (e.key === 'Enter' && ranked[highlightIdx]) {
+      e.preventDefault()
+      onSelect(ranked[highlightIdx])
+      onClose()
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center p-4 pt-20" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-xl p-4" onClick={e => e.stopPropagation()}>
+        {supplierContext && (
+          <p className="text-xs text-zinc-500 mb-1">
+            Buscar para: <span className="font-medium text-zinc-700">{supplierContext}</span>
+          </p>
+        )}
+        <Input ref={inputRef} value={q}
+          onChange={e => { setQ(e.target.value); setHighlightIdx(0) }}
+          onKeyDown={handleKey}
+          placeholder="SKU, código de barras o nombre del producto..." />
+        <div ref={listRef} className="mt-2 max-h-80 overflow-y-auto space-y-0.5">
+          {ranked.map((p, idx) => (
+            <button
+              key={p.id}
+              onClick={() => { onSelect(p); onClose() }}
+              onMouseEnter={() => setHighlightIdx(idx)}
+              className={`w-full text-left px-3 py-2 rounded text-sm ${
+                idx === highlightIdx ? 'bg-blue-50 border border-blue-200' : 'hover:bg-zinc-50 border border-transparent'
+              }`}
+            >
+              <div className="font-medium text-zinc-800 leading-tight">{p.nombre ?? p.sku}</div>
+              <div className="text-[11px] text-zinc-400 mt-0.5">
+                <span className="font-mono">{p.sku}</span>
+                {p.categoria && <span className="ml-2">{p.categoria}</span>}
+              </div>
+            </button>
+          ))}
+          {q.trim().length >= 2 && ranked.length === 0 && (
+            <p className="text-xs text-zinc-400 py-4 text-center">Sin resultados para &ldquo;{q}&rdquo;</p>
+          )}
+          {q.trim().length < 2 && (
+            <p className="text-xs text-zinc-400 py-4 text-center">Escribí al menos 2 letras para buscar</p>
+          )}
+        </div>
+        <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-400">
+          <span>↑↓ navegar · Enter elegir · Esc cerrar</span>
+          <button onClick={onClose} className="underline">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Granel mapper modal: 1 supplier item → N final SKUs ──────────
+
+function GranelMapper({ productos, supplierContext, derivados, onChange, onClose }: {
+  productos       : Producto[]
+  supplierContext : string
+  derivados       : GranelDerivado[]
+  onChange        : (next: GranelDerivado[]) => void
+  onClose         : () => void
 }) {
   const [q, setQ] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   useEffect(() => { inputRef.current?.focus() }, [])
 
-  const barcodeMap = useMemo(() =>
-    new Map(productos.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p]))
-  , [productos])
+  const ranked = useMemo(() => {
+    const query = q.trim().toLowerCase()
+    if (!query) return [] as Producto[]
+    const tokenize = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9áéíóúñ]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
+    const qt = tokenize(query)
+    const ctxTokens = new Set(tokenize(supplierContext))
+    const alreadyAdded = new Set(derivados.map(d => d.producto_id))
+    const scored = productos
+      .filter(p => !alreadyAdded.has(p.id))
+      .map(p => {
+        const sku  = (p.sku ?? '').toLowerCase()
+        const ean  = (p.codigo_barras ?? '').toLowerCase()
+        const name = (p.nombre ?? '').toLowerCase()
 
-  const filtered = useMemo(() => !q.trim() ? [] :
-    productos.filter(p => `${p.nombre ?? ''} ${p.sku} ${p.codigo_barras ?? ''}`.toLowerCase().includes(q.toLowerCase())).slice(0, 20)
-  , [productos, q])
+        if (sku === query || ean === query) return { p, score: 1000 }
+        if (sku.startsWith(query)) return { p, score: 500 }
+        if (ean.startsWith(query)) return { p, score: 400 }
+        if (sku.includes(query) || ean.includes(query)) return { p, score: 200 }
 
-  function handleKey(e: React.KeyboardEvent) {
-    if (e.key === 'Escape') onClose()
-    if (e.key === 'Enter') {
-      const found = barcodeMap.get(q.trim()) ?? productos.find(p => p.sku === q.trim())
-      if (found) { onSelect(found); onClose() }
-    }
+        if (!qt.every(t => name.includes(t))) return { p, score: 0 }
+        const tokens = tokenize(p.nombre ?? '')
+        let score = qt.length * 10
+        if (name.startsWith(qt[0])) score += 5
+        for (const t of tokens) if (ctxTokens.has(t)) score += 1
+        return { p, score }
+      })
+      .filter(x => x.score > 0)
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, 30).map(x => x.p)
+  }, [productos, q, supplierContext, derivados])
+
+  function addDerivado(p: Producto) {
+    onChange([...derivados, {
+      producto_id    : p.id,
+      producto_sku   : p.sku,
+      producto_nombre: p.nombre,
+    }])
+    setQ('')
+    inputRef.current?.focus()
+  }
+
+  function removeDerivado(idx: number) {
+    onChange(derivados.filter((_, i) => i !== idx))
+  }
+
+  function updateCantidad(idx: number, value: string) {
+    const num = value.trim() === '' ? undefined : Number(value)
+    onChange(derivados.map((d, i) => i === idx ? { ...d, cantidad_objetivo: num } : d))
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4" onClick={e => e.stopPropagation()}>
-        <p className="text-sm font-medium text-zinc-700 mb-2">Buscar producto en el sistema</p>
-        <Input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={handleKey}
-          placeholder="Nombre, SKU o código de barras..." />
-        <div className="mt-2 max-h-64 overflow-y-auto space-y-0.5">
-          {filtered.map(p => (
-            <button key={p.id} className="w-full text-left px-3 py-2 rounded hover:bg-zinc-50 text-sm"
-              onClick={() => { onSelect(p); onClose() }}>
-              <span className="font-medium">{p.nombre ?? p.sku}</span>
-              <span className="text-zinc-400 text-xs ml-2 font-mono">{p.sku}</span>
-              {p.categoria && <span className="text-zinc-400 text-xs ml-2">{p.categoria}</span>}
-            </button>
-          ))}
-          {q.length > 1 && filtered.length === 0 && (
-            <p className="text-xs text-zinc-400 py-3 text-center">Sin resultados para "{q}"</p>
-          )}
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center p-4 pt-12" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl p-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-sm font-semibold text-zinc-800">🌾 Configurar derivados de granel</p>
+            <p className="text-xs text-zinc-500 mt-0.5">Origen: <span className="font-medium text-zinc-700">{supplierContext}</span></p>
+          </div>
+          <button onClick={onClose} className="text-xs text-zinc-400 underline">Cerrar</button>
         </div>
-        <button onClick={onClose} className="mt-3 text-xs text-zinc-400 underline">Cerrar</button>
+
+        <div className="grid grid-cols-2 gap-4">
+          {/* Left: search */}
+          <div>
+            <p className="text-[11px] font-medium text-zinc-500 uppercase mb-1">Buscar SKU final</p>
+            <Input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
+              placeholder="Escribí parte del nombre..." />
+            <div className="mt-2 max-h-72 overflow-y-auto space-y-0.5">
+              {ranked.map(p => (
+                <button key={p.id} onClick={() => addDerivado(p)}
+                  className="w-full text-left px-2 py-1.5 rounded hover:bg-emerald-50 border border-transparent hover:border-emerald-200 text-sm">
+                  <div className="font-medium text-zinc-800 leading-tight truncate" title={p.nombre ?? p.sku}>
+                    {p.nombre ?? p.sku}
+                  </div>
+                  <div className="text-[10px] text-zinc-400 mt-0.5 font-mono">{p.sku}</div>
+                </button>
+              ))}
+              {q.trim().length >= 2 && ranked.length === 0 && (
+                <p className="text-xs text-zinc-400 py-3 text-center">Sin resultados</p>
+              )}
+              {q.trim().length < 2 && (
+                <p className="text-xs text-zinc-400 py-3 text-center">Escribí al menos 2 letras</p>
+              )}
+            </div>
+          </div>
+
+          {/* Right: chosen derivados */}
+          <div>
+            <p className="text-[11px] font-medium text-zinc-500 uppercase mb-1">
+              Derivados ({derivados.length})
+            </p>
+            <div className="border rounded-lg bg-emerald-50/40 p-2 max-h-[340px] overflow-y-auto space-y-1.5">
+              {derivados.length === 0 ? (
+                <p className="text-xs text-zinc-400 italic py-6 text-center">
+                  Ningún derivado todavía.<br />Buscá productos a la izquierda.
+                </p>
+              ) : (
+                derivados.map((d, i) => (
+                  <div key={i} className="bg-white rounded border border-emerald-200 px-2 py-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-medium text-zinc-800 truncate" title={d.producto_nombre ?? d.producto_sku}>
+                          {d.producto_nombre ?? d.producto_sku}
+                        </div>
+                        <div className="text-[10px] text-zinc-400 font-mono">{d.producto_sku}</div>
+                      </div>
+                      <button onClick={() => removeDerivado(i)}
+                        className="text-xs text-red-500 hover:text-red-700">✕</button>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <label className="text-[10px] text-zinc-500">Objetivo (opcional):</label>
+                      <input type="number" min="0" step="1"
+                        value={d.cantidad_objetivo ?? ''}
+                        onChange={e => updateCantidad(i, e.target.value)}
+                        className="w-20 text-right border border-zinc-200 rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-300"
+                        placeholder="—"
+                      />
+                      <span className="text-[10px] text-zinc-400">unidades</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex justify-end">
+          <Button size="sm" onClick={onClose}>Listo</Button>
+        </div>
       </div>
     </div>
   )
@@ -223,6 +416,7 @@ export default function RecepcionFacturaPage() {
 
   // UI state
   const [searchTarget, setSearchTarget]       = useState<number | null>(null)
+  const [granelTarget, setGranelTarget]       = useState<number | null>(null)
   const [saving, setSaving]                   = useState(false)
   const [doneReport, setDoneReport]           = useState('')
   const [duxError, setDuxError]               = useState<string | null>(null)
@@ -277,27 +471,94 @@ export default function RecepcionFacturaPage() {
     }
 
     const dbItems = (itemsRes.data ?? []) as Array<{
-      sku: string; nombre_producto: string | null; cantidad_esperada: number
+      id: string; sku: string; nombre_producto: string | null; cantidad_esperada: number
       cantidad_recibida: number | null; fecha_vencimiento: string | null
       estado: string; producto_id: string | null
+      es_granel: boolean | null
+      iva_porcentaje: number | null
+      costo_unitario: number | null
+      sku_proveedor: string | null
+      descripcion_proveedor: string | null
+      precio_venta_sugerido: number | null
     }>
 
-    const reconstructed: InvoiceLineItem[] = dbItems.map(it => ({
-      sku_proveedor         : it.sku,
-      descripcion_proveedor : it.nombre_producto ?? it.sku,
-      cantidad              : it.cantidad_esperada,
-      costo_unitario        : 0,
-      iva_porcentaje        : 21,
-      precio_venta_sugerido : 0,
-      match_confidence      : it.producto_id ? 'sku_map' : 'sin_match',
-      producto_id           : it.producto_id ?? undefined,
-      cantidad_recibida     : it.cantidad_recibida ?? 0,
-      fecha_vencimiento     : it.fecha_vencimiento ?? '',
-      estado_recepcion      : (it.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
-      es_blister            : /^BLISTER\s/i.test(it.nombre_producto ?? ''),
-      unidades_por_blister  : 1,
-      es_granel             : false,
-    }))
+    // Fetch derivados for any granel items, then resolve product info from local state
+    const granelItemIds = dbItems.filter(it => it.es_granel).map(it => it.id)
+    const derivadosByItemId = new Map<string, GranelDerivado[]>()
+    if (granelItemIds.length > 0) {
+      const { data: fracRows } = await supabase
+        .from('recepcion_item_fraccionamiento')
+        .select('recepcion_item_id, producto_final_id, cantidad_objetivo')
+        .in('recepcion_item_id', granelItemIds)
+      type FracRow = {
+        recepcion_item_id : string
+        producto_final_id : string
+        cantidad_objetivo : number | null
+      }
+      const productById = new Map(productos.map(p => [p.id, p]))
+      for (const row of (fracRows ?? []) as FracRow[]) {
+        const prod = productById.get(row.producto_final_id)
+        const list = derivadosByItemId.get(row.recepcion_item_id) ?? []
+        list.push({
+          producto_id      : row.producto_final_id,
+          producto_sku     : prod?.sku ?? '',
+          producto_nombre  : prod?.nombre ?? null,
+          cantidad_objetivo: row.cantidad_objetivo ?? undefined,
+        })
+        derivadosByItemId.set(row.recepcion_item_id, list)
+      }
+    }
+
+    // Fetch lotes for all items
+    const itemIds = dbItems.map(it => it.id)
+    const lotesByItemId = new Map<string, Lote[]>()
+    if (itemIds.length > 0) {
+      const { data: loteRows } = await supabase
+        .from('recepcion_item_lotes')
+        .select('recepcion_item_id, cantidad, fecha_vencimiento, numero_lote')
+        .in('recepcion_item_id', itemIds)
+        .order('fecha_vencimiento', { ascending: true })
+      type LoteRow = {
+        recepcion_item_id: string
+        cantidad         : number
+        fecha_vencimiento: string | null
+        numero_lote      : string | null
+      }
+      for (const row of (loteRows ?? []) as LoteRow[]) {
+        const list = lotesByItemId.get(row.recepcion_item_id) ?? []
+        list.push({
+          cantidad         : row.cantidad,
+          fecha_vencimiento: row.fecha_vencimiento ?? '',
+          numero_lote      : row.numero_lote ?? undefined,
+        })
+        lotesByItemId.set(row.recepcion_item_id, list)
+      }
+    }
+
+    const reconstructed: InvoiceLineItem[] = dbItems.map(it => {
+      const lotes = lotesByItemId.get(it.id) ?? []
+      const cantidadRecibida = lotes.length > 0
+        ? lotes.reduce((s, l) => s + l.cantidad, 0)
+        : (it.cantidad_recibida ?? 0)
+      return {
+        sku_proveedor         : it.sku_proveedor ?? it.sku,
+        descripcion_proveedor : it.descripcion_proveedor ?? it.nombre_producto ?? it.sku,
+        cantidad              : it.cantidad_esperada,
+        costo_unitario        : it.costo_unitario ?? 0,
+        iva_porcentaje        : it.iva_porcentaje ?? 21,
+        precio_venta_sugerido : it.precio_venta_sugerido ?? 0,
+        match_confidence      : it.producto_id ? 'sku_map' : 'sin_match',
+        producto_id           : it.producto_id ?? undefined,
+        cantidad_recibida     : cantidadRecibida,
+        fecha_vencimiento     : it.fecha_vencimiento ?? '',
+        estado_recepcion      : (it.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
+        es_blister            : /^BLISTER\s/i.test(it.nombre_producto ?? ''),
+        unidades_por_blister  : 1,
+        es_granel             : !!it.es_granel,
+        derivados             : it.es_granel ? (derivadosByItemId.get(it.id) ?? []) : undefined,
+        lotes,
+      }
+    })
 
     setSucursalId(rec.sucursal_id ?? SUCURSALES[0].id)
     setTexto(rec.texto_original ?? '')
@@ -307,29 +568,23 @@ export default function RecepcionFacturaPage() {
     setStep('review')
   }
 
-  // ── Lookup maps ──────────────────────────────────────────────
-
-  const barcodeMap = useMemo(() =>
-    new Map(productos.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p]))
-  , [productos])
-
-  const codigoExternoMap = useMemo(() =>
-    new Map(productos.filter(p => p.codigo_externo).map(p => [p.codigo_externo!, p]))
-  , [productos])
-
-  const skuProdMap = useMemo(() =>
-    new Map(productos.map(p => [p.sku, p]))
-  , [productos])
-
-  // Fetch margin when factura changes
+  // Fetch margin + iva_default when factura changes; if iva_default is set,
+  // apply it to any item that still has the parser default (21).
   useEffect(() => {
     if (!factura?.proveedor_nombre) return
     supabase.from('proveedores_config')
-      .select('margen_costo')
+      .select('margen_costo, iva_default')
       .ilike('nombre', `%${factura.proveedor_nombre}%`)
       .single()
       .then(({ data }) => {
-        if (data?.margen_costo != null) setMargenProveedor(data.margen_costo as number)
+        if (!data) return
+        const row = data as { margen_costo: number | null; iva_default: number | null }
+        if (row.margen_costo != null) setMargenProveedor(row.margen_costo)
+        if (row.iva_default != null && row.iva_default !== 21) {
+          setItems(prev => prev.map(it =>
+            it.iva_porcentaje === 21 ? { ...it, iva_porcentaje: row.iva_default! } : it
+          ))
+        }
       })
   }, [factura?.proveedor_nombre])
 
@@ -356,37 +611,25 @@ export default function RecepcionFacturaPage() {
   }
 
   function matchItem(item: InvoiceLineItem, proveedorNombre: string): InvoiceLineItem {
-    // 1. Barcode exact match (EAN13 — 13 digits)
-    if (item.sku_proveedor && barcodeMap.has(item.sku_proveedor))
-      return applyMatch(item, barcodeMap.get(item.sku_proveedor)!, 'exacto')
-
-    // 2. codigo_externo match (supplier's own code stored in Dux)
-    if (item.sku_proveedor && codigoExternoMap.has(item.sku_proveedor))
-      return applyMatch(item, codigoExternoMap.get(item.sku_proveedor)!, 'exacto')
-
-    // 3. proveedor_sku_map match (learned from previous invoices)
+    // Only use learned mappings — supplier sku previously matched manually by an operator.
+    // No automatic matching by barcode / codigo_externo / SKU / fuzzy name.
     const mapEntry = skuMap.find(
       e => e.proveedor_nombre.toLowerCase() === proveedorNombre.toLowerCase()
         && e.sku_proveedor === item.sku_proveedor
     )
     if (mapEntry?.producto_id) {
       const p = productos.find(p => p.id === mapEntry.producto_id)
-      if (p) return applyMatch(item, p, 'sku_map')
+      if (p) {
+        const matched = applyMatch(item, p, 'sku_map')
+        // Flag description change if the supplier renamed/replaced the product under same sku
+        const prev = mapEntry.descripcion_proveedor?.trim()
+        const curr = item.descripcion_proveedor.trim()
+        if (prev && prev !== curr) {
+          matched.descripcion_anterior = prev
+        }
+        return matched
+      }
     }
-
-    // 4. Direct SKU match (Dux internal code)
-    if (item.sku_proveedor && skuProdMap.has(item.sku_proveedor))
-      return applyMatch(item, skuProdMap.get(item.sku_proveedor)!, 'exacto')
-
-    // 5. Fuzzy name match
-    let best = 0; let bestProd: Producto | null = null
-    for (const p of productos) {
-      const s = nameMatchScore(item.descripcion_proveedor, p.nombre ?? '')
-      if (s > best) { best = s; bestProd = p }
-    }
-    if (best >= 0.55 && bestProd)
-      return applyMatch(item, bestProd, 'nombre')
-
     return { ...item, match_confidence: 'sin_match' }
   }
 
@@ -439,6 +682,7 @@ export default function RecepcionFacturaPage() {
           es_blister            : /^blister\s/i.test(it.descripcion),
           unidades_por_blister  : 1,
           es_granel             : false,
+          lotes                 : [],
         })),
       }
 
@@ -499,6 +743,95 @@ export default function RecepcionFacturaPage() {
     setSearchTarget(null)
   }
 
+  function toggleGranel(idx: number) {
+    setItems(prev => {
+      const next = [...prev]
+      const it = next[idx]
+      const becoming = !it.es_granel
+      next[idx] = {
+        ...it,
+        es_granel       : becoming,
+        // When marking as granel, drop the single-product match — derivados take over
+        producto_id     : becoming ? undefined : it.producto_id,
+        producto_sku    : becoming ? undefined : it.producto_sku,
+        producto_nombre : becoming ? undefined : it.producto_nombre,
+        match_confidence: becoming ? 'sin_match' : it.match_confidence,
+        derivados       : becoming ? (it.derivados ?? []) : undefined,
+        cantidad_recibida: becoming ? 0 : it.cantidad_recibida,
+      }
+      return next
+    })
+  }
+
+  function updateDerivados(idx: number, derivados: GranelDerivado[]) {
+    setItems(prev => {
+      const next = [...prev]
+      next[idx] = { ...next[idx], derivados }
+      return next
+    })
+  }
+
+  // Multi-lot helpers — first call to addLote "materializes" current single-lot values
+  function addLote(idx: number) {
+    setItems(prev => {
+      const next = [...prev]
+      const it = next[idx]
+      let lotes = it.lotes
+      if (lotes.length === 0) {
+        lotes = [{
+          cantidad         : it.cantidad_recibida,
+          fecha_vencimiento: it.fecha_vencimiento,
+        }, { cantidad: 0, fecha_vencimiento: '' }]
+      } else {
+        lotes = [...lotes, { cantidad: 0, fecha_vencimiento: '' }]
+      }
+      next[idx] = {
+        ...it,
+        lotes,
+        cantidad_recibida: lotes.reduce((s, l) => s + l.cantidad, 0),
+      }
+      return next
+    })
+  }
+
+  function removeLote(idx: number, loteIdx: number) {
+    setItems(prev => {
+      const next = [...prev]
+      const it = next[idx]
+      const newLotes = it.lotes.filter((_, i) => i !== loteIdx)
+      // Collapse back to single-lot mode if only one remains
+      if (newLotes.length === 1) {
+        next[idx] = {
+          ...it,
+          lotes            : [],
+          cantidad_recibida: newLotes[0].cantidad,
+          fecha_vencimiento: newLotes[0].fecha_vencimiento,
+        }
+      } else {
+        next[idx] = {
+          ...it,
+          lotes            : newLotes,
+          cantidad_recibida: newLotes.reduce((s, l) => s + l.cantidad, 0),
+        }
+      }
+      return next
+    })
+  }
+
+  function updateLote(idx: number, loteIdx: number, patch: Partial<Lote>) {
+    setItems(prev => {
+      const next = [...prev]
+      const it = next[idx]
+      const newLotes = it.lotes.map((l, i) => i === loteIdx ? { ...l, ...patch } : l)
+      next[idx] = {
+        ...it,
+        lotes            : newLotes,
+        cantidad_recibida: newLotes.reduce((s, l) => s + l.cantidad, 0),
+      }
+      return next
+    })
+  }
+
   // ── Save borrador ─────────────────────────────────────────────
 
   const saveBorrador = useCallback(async () => {
@@ -531,19 +864,47 @@ export default function RecepcionFacturaPage() {
 
       if (!recId) throw new Error('No se pudo crear el borrador')
 
-      // Replace all items
+      // Replace all items (cascade deletes lotes + fraccionamiento via FK)
       await supabase.from('recepcion_items').delete().eq('recepcion_id', recId)
       for (const item of items) {
-        await supabase.from('recepcion_items').insert({
-          recepcion_id      : recId,
-          producto_id       : item.producto_id ?? null,
-          sku               : item.producto_sku ?? item.sku_proveedor,
-          nombre_producto   : item.producto_nombre ?? item.descripcion_proveedor,
-          cantidad_esperada : item.cantidad,
-          cantidad_recibida : item.cantidad_recibida,
-          fecha_vencimiento : item.fecha_vencimiento || null,
-          estado            : item.estado_recepcion,
-        })
+        const { data: itemRow } = await supabase.from('recepcion_items').insert({
+          recepcion_id          : recId,
+          producto_id           : item.es_granel ? null : (item.producto_id ?? null),
+          sku                   : item.producto_sku ?? item.sku_proveedor,
+          nombre_producto       : item.producto_nombre ?? item.descripcion_proveedor,
+          cantidad_esperada     : item.cantidad,
+          cantidad_recibida     : item.cantidad_recibida,
+          fecha_vencimiento     : item.fecha_vencimiento || null,
+          estado                : item.estado_recepcion,
+          es_granel             : item.es_granel,
+          iva_porcentaje        : item.iva_porcentaje,
+          costo_unitario        : item.costo_unitario,
+          sku_proveedor         : item.sku_proveedor,
+          descripcion_proveedor : item.descripcion_proveedor,
+          precio_venta_sugerido : item.precio_venta_sugerido,
+        }).select('id').single()
+        const itemId = (itemRow as { id: string } | null)?.id
+        if (itemId && item.es_granel && item.derivados && item.derivados.length > 0) {
+          await supabase.from('recepcion_item_fraccionamiento').insert(
+            item.derivados.map(d => ({
+              recepcion_item_id : itemId,
+              producto_final_id : d.producto_id,
+              cantidad_objetivo : d.cantidad_objetivo ?? null,
+            }))
+          )
+        }
+        if (itemId && item.lotes.length > 0) {
+          await supabase.from('recepcion_item_lotes').insert(
+            item.lotes
+              .filter(l => l.cantidad > 0)
+              .map(l => ({
+                recepcion_item_id : itemId,
+                cantidad          : l.cantidad,
+                fecha_vencimiento : l.fecha_vencimiento || null,
+                numero_lote       : l.numero_lote ?? null,
+              }))
+          )
+        }
       }
 
       setBorradorSavedAt(new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }))
@@ -566,12 +927,20 @@ export default function RecepcionFacturaPage() {
         ? factura.fecha.split('/').reverse().join('-')
         : new Date().toISOString().split('T')[0]
 
-      // ── 1. Upsert recepciones record ────────────────────────
+      // Compute totals inline (mirrors `stats` but kept local to avoid stale-closure issues)
+      const totalNeto  = items.reduce((s, i) => s + i.costo_unitario * i.cantidad, 0)
+      const totalIva   = items.reduce((s, i) => s + i.costo_unitario * i.cantidad * ((i.iva_porcentaje ?? 0) / 100), 0)
+      const totalFinal = totalNeto + totalIva
+
+      // ── 1. Upsert recepciones record with totals ────────────
       let recId: string
       if (borradorId) {
         await supabase.from('recepciones')
           .update({ estado: 'confirmada', sucursal_id: sucursalId,
-            fecha_recepcion: new Date().toISOString().split('T')[0] })
+            fecha_recepcion: new Date().toISOString().split('T')[0],
+            total_neto    : totalNeto,
+            total_iva     : totalIva,
+            total_factura : totalFinal })
           .eq('id', borradorId)
         recId = borradorId
         await supabase.from('recepcion_items').delete().eq('recepcion_id', recId)
@@ -585,28 +954,90 @@ export default function RecepcionFacturaPage() {
           estado             : 'confirmada',
           sucursal_id        : sucursalId,
           texto_original     : texto,
+          total_neto         : totalNeto,
+          total_iva          : totalIva,
+          total_factura      : totalFinal,
         }).select('id').single()
         if (error || !data) throw new Error(error?.message ?? 'Error')
         recId = (data as { id: string }).id
       }
 
-      // ── 2. Save items + vencimientos ────────────────────────
+      // ── 2. Save items + fraccionamiento + vencimientos ──────
       for (const item of items) {
-        await supabase.from('recepcion_items').insert({
-          recepcion_id      : recId,
-          producto_id       : item.producto_id ?? null,
-          sku               : item.producto_sku ?? item.sku_proveedor,
-          nombre_producto   : item.producto_nombre ?? item.descripcion_proveedor,
-          cantidad_esperada : item.cantidad,
-          cantidad_recibida : item.cantidad_recibida,
-          fecha_vencimiento : item.fecha_vencimiento || null,
-          estado            : item.estado_recepcion,
-        })
+        const { data: itemRow } = await supabase.from('recepcion_items').insert({
+          recepcion_id          : recId,
+          producto_id           : item.es_granel ? null : (item.producto_id ?? null),
+          sku                   : item.producto_sku ?? item.sku_proveedor,
+          nombre_producto       : item.producto_nombre ?? item.descripcion_proveedor,
+          cantidad_esperada     : item.cantidad,
+          cantidad_recibida     : item.cantidad_recibida,
+          fecha_vencimiento     : item.fecha_vencimiento || null,
+          estado                : item.estado_recepcion,
+          es_granel             : item.es_granel,
+          iva_porcentaje        : item.iva_porcentaje,
+          costo_unitario        : item.costo_unitario,
+          sku_proveedor         : item.sku_proveedor,
+          descripcion_proveedor : item.descripcion_proveedor,
+          precio_venta_sugerido : item.precio_venta_sugerido,
+        }).select('id').single()
+        const itemId = (itemRow as { id: string } | null)?.id
 
-        // Granel: NO vencimientos here — fraccionamiento creates them
-        // Regular products with expiry: create/update vencimiento
+        // Granel: persist derivatives in fraccionamiento — vencimientos are created later
+        if (itemId && item.es_granel && item.derivados && item.derivados.length > 0) {
+          await supabase.from('recepcion_item_fraccionamiento').insert(
+            item.derivados.map(d => ({
+              recepcion_item_id : itemId,
+              producto_final_id : d.producto_id,
+              cantidad_objetivo : d.cantidad_objetivo ?? null,
+            }))
+          )
+        }
+
+        // Multi-lot: persist lots + create one vencimiento row per lot
+        if (itemId && !item.es_granel && item.lotes.length > 0) {
+          const validLotes = item.lotes.filter(l => l.cantidad > 0)
+          if (validLotes.length > 0) {
+            await supabase.from('recepcion_item_lotes').insert(
+              validLotes.map(l => ({
+                recepcion_item_id : itemId,
+                cantidad          : l.cantidad,
+                fecha_vencimiento : l.fecha_vencimiento || null,
+                numero_lote       : l.numero_lote ?? null,
+              }))
+            )
+            if (item.producto_id && item.estado_recepcion !== 'vencido_llegada') {
+              for (const l of validLotes) {
+                if (!l.fecha_vencimiento) continue
+                const { data: existing } = await supabase.from('vencimientos')
+                  .select('id,cantidad')
+                  .eq('producto_id', item.producto_id)
+                  .eq('sucursal_id', sucursalId)
+                  .eq('fecha_vencimiento', l.fecha_vencimiento)
+                  .single()
+                if (existing) {
+                  await supabase.from('vencimientos')
+                    .update({ cantidad: (existing as { id: string; cantidad: number }).cantidad + l.cantidad,
+                      updated_at: new Date().toISOString() })
+                    .eq('id', (existing as { id: string }).id)
+                } else {
+                  await supabase.from('vencimientos').insert({
+                    producto_id      : item.producto_id,
+                    sucursal_id      : sucursalId,
+                    fecha_vencimiento: l.fecha_vencimiento,
+                    cantidad         : l.cantidad,
+                    origen           : 'recepcion_factura',
+                    recepcion_id     : recId,
+                  })
+                }
+              }
+            }
+          }
+        }
+
+        // Single-lot legacy path: one vencimiento with item-level date/qty
         if (
           !item.es_granel &&
+          item.lotes.length === 0 &&
           item.producto_id &&
           item.fecha_vencimiento &&
           item.cantidad_recibida > 0 &&
@@ -651,6 +1082,16 @@ export default function RecepcionFacturaPage() {
           creado_por           : 'auto',
           updated_at           : new Date().toISOString(),
         }, { onConflict: 'proveedor_nombre,sku_proveedor' })
+      }
+
+      // ── 3.5. Learn iva_default for supplier when >=70% items are 10.5% ─
+      if (items.length > 0 && factura.proveedor_nombre) {
+        const pct10 = items.filter(i => i.iva_porcentaje === 10.5).length / items.length
+        if (pct10 >= 0.70) {
+          await supabase.from('proveedores_config')
+            .update({ iva_default: 10.5 })
+            .ilike('nombre', `%${factura.proveedor_nombre}%`)
+        }
       }
 
       // ── 4. POST to Dux v2/compras ────────────────────────────
@@ -740,15 +1181,21 @@ export default function RecepcionFacturaPage() {
 
   // ── Stats ─────────────────────────────────────────────────────
 
-  const stats = useMemo(() => ({
-    total    : items.length,
-    exacto   : items.filter(i => i.match_confidence === 'exacto' || i.match_confidence === 'sku_map').length,
-    nombre   : items.filter(i => i.match_confidence === 'nombre').length,
-    sinMatch : items.filter(i => i.match_confidence === 'sin_match').length,
-    granel   : items.filter(i => i.es_granel).length,
-    blisters : items.filter(i => i.es_blister && !i.es_granel).length,
-    totalCosto: items.reduce((s, i) => s + i.costo_unitario * i.cantidad, 0),
-  }), [items])
+  const stats = useMemo(() => {
+    const totalNeto = items.reduce((s, i) => s + i.costo_unitario * i.cantidad, 0)
+    const totalIva  = items.reduce((s, i) => s + i.costo_unitario * i.cantidad * ((i.iva_porcentaje ?? 0) / 100), 0)
+    return {
+      total      : items.length,
+      pendientes : items.filter(i => !i.producto_id && !i.es_granel).length,
+      mapeados   : items.filter(i => i.producto_id || (i.es_granel && (i.derivados?.length ?? 0) > 0)).length,
+      granel     : items.filter(i => i.es_granel).length,
+      blisters   : items.filter(i => i.es_blister && !i.es_granel).length,
+      totalCosto : totalNeto,
+      totalNeto,
+      totalIva,
+      totalFinal : totalNeto + totalIva,
+    }
+  }, [items])
 
   // ── Computed derived values ───────────────────────────────────
 
@@ -851,8 +1298,20 @@ export default function RecepcionFacturaPage() {
         {searchTarget !== null && (
           <ProductSearch
             productos={productos}
+            supplierContext={items[searchTarget]?.descripcion_proveedor}
+            initialQuery=""
             onSelect={p => manualMatch(searchTarget, p)}
             onClose={() => setSearchTarget(null)}
+          />
+        )}
+
+        {granelTarget !== null && items[granelTarget] && (
+          <GranelMapper
+            productos={productos}
+            supplierContext={items[granelTarget].descripcion_proveedor}
+            derivados={items[granelTarget].derivados ?? []}
+            onChange={ds => updateDerivados(granelTarget, ds)}
+            onClose={() => setGranelTarget(null)}
           />
         )}
 
@@ -896,13 +1355,11 @@ export default function RecepcionFacturaPage() {
           <div><span className="text-zinc-400">Costo total:</span> <span className="font-medium">${stats.totalCosto.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</span></div>
         </div>
 
-        {/* Match stats */}
-        <div className="flex flex-wrap gap-2 text-xs">
-          <Badge className="bg-green-100 text-green-700 border-green-300">{stats.exacto} exactos</Badge>
-          {stats.nombre > 0 && <Badge className="bg-yellow-100 text-yellow-700 border-yellow-300">{stats.nombre} por nombre — verificar</Badge>}
-          {stats.sinMatch > 0 && <Badge className="bg-red-100 text-red-700 border-red-300">{stats.sinMatch} sin match — asignar</Badge>}
-          {stats.granel > 0 && <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">🌾 {stats.granel} granel</Badge>}
-          {stats.blisters > 0 && <Badge className="bg-blue-100 text-blue-700 border-blue-300">🔷 {stats.blisters} blisters</Badge>}
+        {/* Pending mapping notice */}
+        <div className="flex items-center gap-2 text-xs">
+          <Badge className="bg-zinc-100 text-zinc-700 border-zinc-300">{items.length} ítems</Badge>
+          {stats.pendientes > 0 && <Badge className="bg-red-100 text-red-700 border-red-300">{stats.pendientes} por asignar</Badge>}
+          {stats.mapeados > 0 && <Badge className="bg-green-100 text-green-700 border-green-300">{stats.mapeados} mapeados</Badge>}
         </div>
 
         {/* Table */}
@@ -914,7 +1371,6 @@ export default function RecepcionFacturaPage() {
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500 w-6">#</th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500">Descripción factura</th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500">Producto sistema</th>
-                  <th className="text-center px-2 py-2 text-xs font-medium text-zinc-500 w-24">Match</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-14">Fact.</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-20">Recibido</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-22">Costo</th>
@@ -928,10 +1384,8 @@ export default function RecepcionFacturaPage() {
                 {items.map((item, i) => {
                   const rowCls = item.es_granel
                     ? 'bg-emerald-50'
-                    : item.match_confidence === 'sin_match'
+                    : !item.producto_id
                     ? 'bg-red-50'
-                    : item.match_confidence === 'nombre'
-                    ? 'bg-yellow-50'
                     : item.estado_recepcion === 'vencido_llegada'
                     ? 'bg-orange-50'
                     : 'hover:bg-zinc-50'
@@ -943,14 +1397,46 @@ export default function RecepcionFacturaPage() {
                       {/* Supplier description */}
                       <td className="px-3 py-2 max-w-[160px]">
                         <div className="text-xs font-mono text-zinc-400 truncate">{item.sku_proveedor}</div>
-                        <div className="text-xs text-zinc-700 truncate" title={item.descripcion_proveedor}>
-                          {item.descripcion_proveedor}
+                        <div className="flex items-start gap-1">
+                          <div className="text-xs text-zinc-700 truncate flex-1" title={item.descripcion_proveedor}>
+                            {item.descripcion_proveedor}
+                          </div>
+                          {item.descripcion_anterior && (
+                            <span title={`Antes era: ${item.descripcion_anterior}`}
+                              className="text-amber-500 text-sm cursor-help shrink-0">⚠️</span>
+                          )}
                         </div>
                       </td>
 
-                      {/* Matched product */}
-                      <td className="px-3 py-2 max-w-[160px]">
-                        {item.producto_nombre ? (
+                      {/* Matched product (or list of derivados if granel) */}
+                      <td className="px-3 py-2 max-w-[200px]">
+                        {item.es_granel ? (
+                          <div className="space-y-0.5">
+                            {(item.derivados ?? []).length === 0 ? (
+                              <button onClick={() => setGranelTarget(i)}
+                                className="text-xs text-emerald-700 underline hover:text-emerald-900 font-medium">
+                                + Configurar derivados
+                              </button>
+                            ) : (
+                              <>
+                                <ul className="text-[11px] text-zinc-700 leading-tight space-y-0.5">
+                                  {(item.derivados ?? []).map((d, di) => (
+                                    <li key={di} className="truncate" title={d.producto_nombre ?? d.producto_sku}>
+                                      · {d.producto_nombre ?? d.producto_sku}
+                                      {d.cantidad_objetivo != null && (
+                                        <span className="text-zinc-400"> ({d.cantidad_objetivo})</span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                                <button onClick={() => setGranelTarget(i)}
+                                  className="text-[10px] text-emerald-700 underline hover:text-emerald-900">
+                                  Editar derivados ({(item.derivados ?? []).length})
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ) : item.producto_nombre ? (
                           <>
                             <div className="text-xs font-medium text-zinc-800 truncate" title={item.producto_nombre}>
                               {item.producto_nombre}
@@ -967,13 +1453,6 @@ export default function RecepcionFacturaPage() {
                         )}
                       </td>
 
-                      {/* Match */}
-                      <td className="px-2 py-2 text-center">
-                        <span className={`inline-block text-[10px] font-medium px-1.5 py-0.5 rounded border ${CONFIDENCE_BADGE[item.match_confidence].cls}`}>
-                          {CONFIDENCE_BADGE[item.match_confidence].label}
-                        </span>
-                      </td>
-
                       {/* Qty invoice */}
                       <td className="px-2 py-2 text-right tabular-nums text-zinc-500 text-sm">{item.cantidad}</td>
 
@@ -988,6 +1467,10 @@ export default function RecepcionFacturaPage() {
                             />
                             <span className="text-[10px] text-emerald-600">actualizar</span>
                           </div>
+                        ) : item.lotes.length > 0 ? (
+                          <span className="inline-block w-16 text-right text-sm tabular-nums text-zinc-600 italic" title="Calculado desde lotes">
+                            {item.cantidad_recibida}
+                          </span>
                         ) : (
                           <input type="number" min="0"
                             value={item.cantidad_recibida}
@@ -1021,12 +1504,41 @@ export default function RecepcionFacturaPage() {
                         ) : <span className="text-zinc-300 text-xs">—</span>}
                       </td>
 
-                      {/* Expiry */}
-                      <td className="px-2 py-2 relative">
+                      {/* Expiry — single date or multi-lot */}
+                      <td className="px-2 py-2 relative align-top">
                         {item.es_granel ? (
                           <span className="text-[10px] text-emerald-600 italic">en fraccionamiento</span>
+                        ) : item.lotes.length === 0 ? (
+                          <div className="flex flex-col gap-1">
+                            <DateSelector value={item.fecha_vencimiento} onChange={v => updateItem(i, { fecha_vencimiento: v })} />
+                            <button onClick={() => addLote(i)}
+                              className="text-[10px] text-zinc-400 underline hover:text-zinc-700 text-left">
+                              + otro vencimiento
+                            </button>
+                          </div>
                         ) : (
-                          <DateSelector value={item.fecha_vencimiento} onChange={v => updateItem(i, { fecha_vencimiento: v })} />
+                          <div className="flex flex-col gap-1.5 min-w-[200px]">
+                            {item.lotes.map((lote, li) => (
+                              <div key={li} className="flex items-center gap-1 bg-white border border-zinc-200 rounded px-1.5 py-1">
+                                <input type="number" min="0" value={lote.cantidad}
+                                  onChange={e => updateLote(i, li, { cantidad: parseInt(e.target.value) || 0 })}
+                                  className="w-12 text-right border border-zinc-200 rounded px-1 py-0.5 text-xs tabular-nums focus:outline-none"
+                                  title="Cantidad de este lote"
+                                />
+                                <DateSelector value={lote.fecha_vencimiento}
+                                  onChange={v => updateLote(i, li, { fecha_vencimiento: v })} />
+                                <button onClick={() => removeLote(i, li)}
+                                  className="text-xs text-red-500 hover:text-red-700">✕</button>
+                              </div>
+                            ))}
+                            <div className="flex items-center justify-between text-[10px]">
+                              <button onClick={() => addLote(i)}
+                                className="text-zinc-500 underline hover:text-zinc-800">+ lote</button>
+                              <span className={`tabular-nums ${item.cantidad_recibida === item.cantidad ? 'text-green-600' : 'text-orange-600'}`}>
+                                Σ {item.cantidad_recibida}/{item.cantidad}
+                              </span>
+                            </div>
+                          </div>
                         )}
                       </td>
 
@@ -1043,10 +1555,15 @@ export default function RecepcionFacturaPage() {
                         </select>
                       </td>
 
-                      {/* Type badge */}
+                      {/* Type badge + granel toggle */}
                       <td className="px-2 py-2 text-center">
                         {item.es_granel ? (
-                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] px-1">🌾 Granel</Badge>
+                          <div className="flex flex-col items-center gap-1">
+                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] px-1">🌾 Granel</Badge>
+                            <button onClick={() => toggleGranel(i)} className="text-[10px] text-zinc-400 underline hover:text-zinc-700">
+                              quitar
+                            </button>
+                          </div>
                         ) : item.es_blister ? (
                           <div className="flex flex-col items-center gap-1">
                             <Badge className="bg-blue-100 text-blue-700 border-blue-300 text-[10px] px-1">🔷 Blister</Badge>
@@ -1059,7 +1576,12 @@ export default function RecepcionFacturaPage() {
                               />
                             </div>
                           </div>
-                        ) : null}
+                        ) : (
+                          <button onClick={() => toggleGranel(i)}
+                            className="text-[10px] text-zinc-400 underline hover:text-emerald-700">
+                            marcar granel
+                          </button>
+                        )}
                       </td>
                     </tr>
                   )
@@ -1071,10 +1593,37 @@ export default function RecepcionFacturaPage() {
 
         {/* Legend */}
         <div className="flex flex-wrap gap-4 text-xs text-zinc-500">
-          <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-600" />Verde = exacto</span>
-          <span className="flex items-center gap-1"><AlertCircle size={12} className="text-yellow-500" />Amarillo = verificar nombre</span>
-          <span className="flex items-center gap-1"><HelpCircle size={12} className="text-red-500" />Rojo = asignar manualmente</span>
-          <span className="flex items-center gap-1"><span className="text-emerald-600">🌾</span>Verde oscuro = granel (actualizá al fraccionar)</span>
+          <span className="flex items-center gap-1"><HelpCircle size={12} className="text-red-500" />Rojo = sin asignar — click en &ldquo;+ Asignar&rdquo;</span>
+          <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-600" />Sin color = mapeado</span>
+          <span className="flex items-center gap-1"><span className="text-emerald-600">🌾</span>Verde = granel (se fracciona después)</span>
+        </div>
+
+        {/* Totals validation panel */}
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+          <p className="text-xs font-medium text-blue-900 mb-2 uppercase tracking-wide">Validación de totales</p>
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <div className="text-[11px] text-blue-700">Neto</div>
+              <div className="font-medium tabular-nums text-blue-900">
+                ${stats.totalNeto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] text-blue-700">IVA</div>
+              <div className="font-medium tabular-nums text-blue-900">
+                ${stats.totalIva.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] text-blue-700">Total final</div>
+              <div className="font-semibold tabular-nums text-blue-900">
+                ${stats.totalFinal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+          </div>
+          <p className="text-[11px] text-blue-700 mt-2">
+            Verificá que el total coincida con el de la factura antes de confirmar. Si no, ajustá costo o IVA por ítem.
+          </p>
         </div>
 
         <div className="flex justify-between items-center">

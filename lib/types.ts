@@ -137,6 +137,19 @@ export type MatchConfidence = 'exacto' | 'sku_map' | 'nombre' | 'manual' | 'sin_
 export type EstadoRecepcion = 'ok' | 'faltante' | 'extra' | 'vencido_llegada'
 export type ProveedorType   = 'diet' | 'ankas' | 'epn' | 'otro'
 
+export interface GranelDerivado {
+  producto_id        : string
+  producto_sku       : string
+  producto_nombre    : string | null
+  cantidad_objetivo ?: number       // optional: target units to produce of this final SKU
+}
+
+export interface Lote {
+  cantidad         : number
+  fecha_vencimiento: string         // YYYY-MM-DD ('' if unknown)
+  numero_lote     ?: string
+}
+
 export interface InvoiceLineItem {
   // From supplier invoice
   sku_proveedor         : string      // supplier code or barcode
@@ -146,7 +159,7 @@ export interface InvoiceLineItem {
   iva_porcentaje        : number      // 21 or 10.5
   precio_venta_sugerido : number      // costo_unitario × (1 + margen) — filled after matching
 
-  // Matched product in SOHO OS
+  // Matched product in SOHO OS (single match — for non-granel items)
   producto_id           ?: string
   producto_sku          ?: string
   producto_nombre       ?: string
@@ -155,18 +168,29 @@ export interface InvoiceLineItem {
   match_confidence      : MatchConfidence
 
   // User fills during review
-  cantidad_recibida : number
-  fecha_vencimiento : string          // YYYY-MM-DD
+  cantidad_recibida : number          // when lotes is empty: editable; when not: derived sum of lotes
+  fecha_vencimiento : string          // YYYY-MM-DD — single-lot legacy field, ignored when `lotes` has entries
   estado_recepcion  : EstadoRecepcion
+
+  // Múltiples lotes con sus propias fechas/cantidades (FEFO).
+  // Empty array → single-lot mode (use fecha_vencimiento + cantidad_recibida directly).
+  // Non-empty → multi-lot mode (cantidad_recibida derives from sum of lotes.cantidad).
+  lotes : Lote[]
+
+  // Set when the supplier description on this invoice differs from the one saved
+  // in proveedor_sku_map for the same sku_proveedor. UI shows a ⚠️ icon with tooltip.
+  descripcion_anterior?: string
 
   // Blister / fraccionamiento
   es_blister          : boolean
   unidades_por_blister: number        // how many individual units per blister box
 
-  // Granel (bulk by weight)
-  // Reception is saved as draft; quantities are updated as fractionation happens.
-  // Vencimientos are NOT created at confirmation — fraccionamiento creates them.
-  es_granel: boolean
+  // Granel (bulk by weight) — 1 supplier item → N final SKUs.
+  // When es_granel = true, use `derivados` instead of producto_id.
+  // Reception saved as draft; quantities updated as fractionation happens.
+  // Vencimientos NOT created at confirmation — fraccionamiento creates them.
+  es_granel : boolean
+  derivados?: GranelDerivado[]
 }
 
 export interface ParsedFactura {

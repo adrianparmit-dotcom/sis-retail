@@ -22,6 +22,15 @@ interface Cajon {
   sucursal_id: string
   codigo: string
   sector: string | null
+  numero: number | null
+  nota: string | null
+}
+
+// Human-friendly label: "Cajón 51" / "Caja 17"
+function cajonLabel(c: Pick<Cajon, 'sector' | 'numero' | 'codigo'>): string {
+  const tipo = c.sector === 'Cajas' ? 'Caja' : 'Cajón'
+  if (c.numero != null) return `${tipo} ${c.numero}`
+  return c.codigo  // fallback for legacy rows without numero
 }
 
 interface CajonProducto {
@@ -64,7 +73,7 @@ export default function UbicacionesPage() {
   useEffect(() => {
     const load = async () => {
       const [cajonRes, cpRes, allProds] = await Promise.all([
-        supabase.from('cajones').select('id,sucursal_id,codigo,sector').order('codigo'),
+        supabase.from('cajones').select('id,sucursal_id,codigo,sector,numero,nota').order('sector').order('numero'),
         supabase.from('cajon_productos').select('id,cajon_id,producto_id,cantidad,producto:productos(id,sku,nombre)'),
         fetchAllFromView<Producto>('productos', {
           select: 'id,sku,nombre,codigo_barras',
@@ -141,13 +150,19 @@ export default function UbicacionesPage() {
     }
   }
 
-  // ── Grouped by sector ─────────────────────────────────────────────────
+  // ── Grouped by sector (Cajones first, Cajas after) + sorted by número.
+  // Always include both 'Cajones' and 'Cajas' so the add button shows up
+  // even when the current sucursal has zero of that type yet.
   const grouped = useMemo(() => {
     const map = new Map<string, Cajon[]>()
+    for (const s of SECTOR_ORDER) map.set(s, [])
     for (const c of tabCajones) {
       const key = c.sector ?? 'Sin sector'
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(c)
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => (a.numero ?? 0) - (b.numero ?? 0))
     }
     return Array.from(map.entries()).sort(([a], [b]) => {
       const ai = SECTOR_ORDER.indexOf(a), bi = SECTOR_ORDER.indexOf(b)
@@ -190,6 +205,88 @@ export default function UbicacionesPage() {
     await supabase.from('cajon_productos').update({ cantidad: qty }).eq('id', cpId)
     setCajonProductos(prev => prev.map(cp => cp.id === cpId ? { ...cp, cantidad: qty } : cp))
     setQtyEdits(prev => { const n = { ...prev }; delete n[cpId]; return n })
+  }
+
+  // ── Cajón header edit (sector / numero) ────────────────────────────────
+  async function setCajonSector(cajonId: string, newSector: 'Cajones' | 'Cajas') {
+    const c = cajones.find(x => x.id === cajonId)
+    if (!c || c.sector === newSector) return
+    // Keep codigo in sync (legacy field)
+    const prefix = newSector === 'Cajas' ? 'CA' : 'C'
+    const newCodigo = c.numero != null ? `${prefix}-${String(c.numero).padStart(2, '0')}` : c.codigo
+    const { error } = await supabase.from('cajones')
+      .update({ sector: newSector, codigo: newCodigo })
+      .eq('id', cajonId)
+    if (error) { alert('No se pudo cambiar tipo: ' + error.message); return }
+    setCajones(prev => prev.map(x => x.id === cajonId ? { ...x, sector: newSector, codigo: newCodigo } : x))
+  }
+
+  async function setCajonNumero(cajonId: string, raw: string) {
+    const n = parseInt(raw)
+    if (!Number.isFinite(n) || n < 0) return
+    const c = cajones.find(x => x.id === cajonId)
+    if (!c || c.numero === n) return
+    // Check duplicates in same sucursal+sector
+    const dup = cajones.some(x => x.id !== cajonId && x.sucursal_id === c.sucursal_id && x.sector === c.sector && x.numero === n)
+    if (dup) { alert(`Ya existe un ${c.sector === 'Cajas' ? 'Caja' : 'Cajón'} con número ${n} en esta sucursal.`); return }
+    const prefix = c.sector === 'Cajas' ? 'CA' : 'C'
+    const newCodigo = `${prefix}-${String(n).padStart(2, '0')}`
+    const { error } = await supabase.from('cajones')
+      .update({ numero: n, codigo: newCodigo })
+      .eq('id', cajonId)
+    if (error) { alert('No se pudo cambiar número: ' + error.message); return }
+    setCajones(prev => prev.map(x => x.id === cajonId ? { ...x, numero: n, codigo: newCodigo } : x))
+  }
+
+  async function setCajonNota(cajonId: string, raw: string) {
+    const c = cajones.find(x => x.id === cajonId)
+    if (!c) return
+    const trimmed = raw.trim()
+    const next = trimmed === '' ? null : trimmed
+    if (next === c.nota) return
+    const { error } = await supabase.from('cajones').update({ nota: next }).eq('id', cajonId)
+    if (error) { alert('No se pudo guardar nota: ' + error.message); return }
+    setCajones(prev => prev.map(x => x.id === cajonId ? { ...x, nota: next } : x))
+  }
+
+  async function eliminarCajon(cajonId: string) {
+    const c = cajones.find(x => x.id === cajonId)
+    if (!c) return
+    const label = cajonLabel(c)
+    const prods = cajonProductos.filter(cp => cp.cajon_id === cajonId)
+    const msg = prods.length > 0
+      ? `Eliminar ${label}? Tiene ${prods.length} producto(s) asignado(s) que también se desasignarán.`
+      : `Eliminar ${label}?`
+    if (!confirm(msg)) return
+    const { error } = await supabase.from('cajones').delete().eq('id', cajonId)
+    if (error) { alert('No se pudo eliminar: ' + error.message); return }
+    setCajones(prev => prev.filter(x => x.id !== cajonId))
+    setCajonProductos(prev => prev.filter(cp => cp.cajon_id !== cajonId))
+    if (editingId === cajonId) setEditingId(null)
+  }
+
+  async function agregarCajon(sector: 'Cajones' | 'Cajas') {
+    const tipo = sector === 'Cajas' ? 'Caja' : 'Cajón'
+    // Suggest next available number in current sucursal+sector
+    const sameGroup = cajones
+      .filter(c => c.sucursal_id === activeSucursal && c.sector === sector && c.numero != null)
+      .map(c => c.numero!)
+    const suggested = sameGroup.length > 0 ? Math.max(...sameGroup) + 1 : 1
+    const raw = window.prompt(`Número de la nueva ${tipo}:`, String(suggested))
+    if (!raw) return
+    const n = parseInt(raw.trim())
+    if (!Number.isFinite(n) || n < 0) { alert('Número inválido'); return }
+    if (sameGroup.includes(n)) { alert(`Ya existe ${tipo} ${n} en esta sucursal.`); return }
+    const prefix = sector === 'Cajas' ? 'CA' : 'C'
+    const codigo = `${prefix}-${String(n).padStart(2, '0')}`
+    const { data, error } = await supabase.from('cajones').insert({
+      sucursal_id: activeSucursal,
+      sector,
+      numero     : n,
+      codigo,
+    }).select('id,sucursal_id,codigo,sector,numero').single()
+    if (error || !data) { alert('No se pudo crear: ' + (error?.message ?? '')); return }
+    setCajones(prev => [...prev, data as Cajon])
   }
 
   // ── Add product ───────────────────────────────────────────────────────
@@ -292,6 +389,14 @@ export default function UbicacionesPage() {
                   {matchingIds && matchCount < items.length && (
                     <span className="text-xs text-amber-600 font-medium">{matchCount} coinciden</span>
                   )}
+                  {(sector === 'Cajones' || sector === 'Cajas') && (
+                    <button
+                      onClick={() => agregarCajon(sector as 'Cajones' | 'Cajas')}
+                      className="ml-auto text-xs text-blue-600 hover:text-blue-800 underline"
+                    >
+                      + {sector === 'Cajas' ? 'Caja' : 'Cajón'}
+                    </button>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-2">
@@ -319,12 +424,22 @@ export default function UbicacionesPage() {
                             : 'bg-zinc-50 border-dashed border-zinc-200 hover:border-zinc-300 cursor-pointer'
                         }`}
                       >
-                        {/* Header: code + badges */}
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="font-mono text-[11px] font-bold text-zinc-500 tracking-wider">{c.codigo}</span>
-                          <div className="flex items-center gap-1">
+                        {/* Header: human label + nota badge + counters */}
+                        <div className="flex items-center justify-between gap-1 mb-1.5">
+                          <div className="flex items-baseline gap-1.5 min-w-0">
+                            <span className="text-sm font-semibold text-zinc-800 leading-tight whitespace-nowrap">
+                              {cajonLabel(c)}
+                            </span>
+                            {c.nota && (
+                              <span className="text-[10px] font-medium text-cyan-700 bg-cyan-50 border border-cyan-200 rounded px-1 py-0.5 leading-none truncate"
+                                title={c.nota}>
+                                {/^freezer$/i.test(c.nota.trim()) ? '❄️' : ''} {c.nota}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
                             {sinContar && !isEditing && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" title="Sin contar" />
+                              <span className="w-1.5 h-1.5 rounded-full bg-orange-400" title="Sin contar" />
                             )}
                             {ocupado
                               ? <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 py-0.5 leading-none">{prods.length}</span>
@@ -332,6 +447,53 @@ export default function UbicacionesPage() {
                             }
                           </div>
                         </div>
+
+                        {/* Edit header: tipo toggle + número + eliminar */}
+                        {isEditing && (
+                          <div className="mb-2 space-y-1.5" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center gap-1.5">
+                              <div className="flex rounded border border-zinc-200 overflow-hidden text-[11px]">
+                                <button
+                                  onClick={() => setCajonSector(c.id, 'Cajones')}
+                                  className={`px-2 py-0.5 ${c.sector === 'Cajones' ? 'bg-blue-500 text-white font-semibold' : 'bg-white text-zinc-600 hover:bg-zinc-50'}`}
+                                >Cajón</button>
+                                <button
+                                  onClick={() => setCajonSector(c.id, 'Cajas')}
+                                  className={`px-2 py-0.5 border-l border-zinc-200 ${c.sector === 'Cajas' ? 'bg-blue-500 text-white font-semibold' : 'bg-white text-zinc-600 hover:bg-zinc-50'}`}
+                                >Caja</button>
+                              </div>
+                              <span className="text-[10px] text-zinc-400">N°</span>
+                              <input
+                                type="number"
+                                min="1"
+                                defaultValue={c.numero ?? ''}
+                                onBlur={e => setCajonNumero(c.id, e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                                }}
+                                onClick={e => { e.stopPropagation(); (e.target as HTMLInputElement).select() }}
+                                className="w-14 text-[11px] text-center bg-white border border-blue-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                              />
+                            </div>
+                            <input
+                              type="text"
+                              defaultValue={c.nota ?? ''}
+                              placeholder="Nota (ej: Freezer)"
+                              onBlur={e => setCajonNota(c.id, e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                              }}
+                              onClick={e => { e.stopPropagation(); (e.target as HTMLInputElement).select() }}
+                              className="w-full text-[10px] bg-white border border-zinc-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-cyan-300 focus:border-cyan-300"
+                            />
+                            <button
+                              onClick={() => eliminarCajon(c.id)}
+                              className="w-full text-[10px] text-red-500 border border-red-200 rounded py-0.5 hover:bg-red-50"
+                            >
+                              Eliminar {cajonLabel(c)}
+                            </button>
+                          </div>
+                        )}
 
                         {/* VIEW MODE */}
                         {!isEditing && (

@@ -55,6 +55,7 @@ function makeBlankItem(override?: Partial<InvoiceLineItem>): InvoiceLineItem {
     es_blister            : false,
     unidades_por_blister  : 1,
     es_granel             : false,
+    lotes                 : [],
     ...override,
   }
 }

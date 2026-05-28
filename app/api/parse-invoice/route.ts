@@ -23,14 +23,55 @@ const USER_PROMPT = `Analizá esta factura y extraé todos los ítems. Respondé
 
 {"proveedor":"nombre del proveedor","nro_comprobante":"número de factura (ej: 0001-00012345)","fecha":"DD/MM/YYYY","items":[{"codigo":"código del proveedor o EAN13 o vacío","descripcion":"descripción sin comillas internas","cantidad":1,"costo_unitario":0.00,"iva_porcentaje":21}]}
 
-Reglas:
-- costo_unitario = importe neto / cantidad (sin IVA, ya con descuentos aplicados), como número decimal
-- iva_porcentaje = 21 o 10.5 (número, no string)
-- Para Diet/Mayordiet: productos con ** al inicio tienen IVA 10.5%, el resto 21%
-- No incluyas subtotales, totales ni encabezados repetidos
-- Si el código tiene 13 dígitos numéricos es EAN13, usalo como codigo
-- Incluí TODOS los ítems, incluyendo granel
-- En las descripciones, reemplazá comillas internas por (") para no romper el JSON`
+REGLAS DE EXTRACCIÓN:
+
+1. Estructura de ítems
+   - Cada ítem real tiene UN código, UNA descripción y UNA cantidad asociada
+   - Las facturas suelen distribuir un ítem en varias líneas físicas (descripción larga, subcategoría, sub-detalle entre paréntesis): unificalas en UN solo objeto
+   - Si una línea no tiene cantidad ni precio, es continuación de la línea anterior — concatenala al campo "descripcion"
+
+2. Costo unitario y bonificaciones
+   - costo_unitario = importe NETO unitario después de aplicar bonificaciones, SIN IVA
+   - Si la factura tiene columnas "Importe Bonif" y "Importe": usá el "Importe" final / cantidad
+   - Si la factura aplica un % de bonificación implícito (ej: "0,26 0,00 28.867,35"), tomá el "Importe" final como verdad
+   - NO sumes IVA al costo_unitario — eso lo calcula el sistema
+
+3. IVA por ítem
+   - Si la factura discrimina IVA por ítem, usá ese valor
+   - Diet/Mayordiet: ítems que arrancan con ** son 10.5%, el resto 21%
+   - Si no podés determinar, dejá 21
+   - Devolvé el número (21 o 10.5), no string
+
+4. Detección de bonificaciones encubiertas (CRÍTICO)
+   - Algunos proveedores meten "regalos" como ítems con precio muy bajo (ej: si un SKU vale $9.000 normalmente y aparece otra línea del MISMO SKU a $850, es bonificación)
+   - INCLUILOS en la lista pero con su precio real (no los descartes), las chicas los van a marcar manualmente
+
+5. Códigos
+   - Pueden ser EAN13 (13 dígitos), códigos internos (alfanuméricos con guiones como "GEO-VIT-C", "Ultratech-508-combo"), o números cortos (ej: "261", "3548")
+   - Usá el código tal cual aparece en la primera columna del ítem
+   - Si la primera columna está vacía, dejá "codigo" como ""
+
+6. Combos / packs
+   - Si el ítem es un combo (ej: "caja x 12 unidades", "Ultratech-XXX-combo"), tratalo como UN solo ítem
+   - NO desgloses los componentes internos del combo en ítems separados (aunque aparezcan en sub-detalle)
+
+7. Texto a IGNORAR (no son ítems)
+   - "Transporte: XXX", "Continua en: X", "Hoja X de Y"
+   - "Subtotal", "Total", "IVA", "Bonificación", "Recargo", "Otros Impuestos"
+   - Cabeceras repetidas en cada página (datos del proveedor, CUIT, dirección)
+   - Pie de factura: "Recibimos:", "Medios de pago:", "CAE N°:", "Fecha de Vto.:"
+   - Datos del cliente (SHUK SRL, etc.)
+   - Tablas de discriminación de impuestos al pie ("I.V.A. 21,00 %", "Base imp.", etc.)
+
+8. Formato de números
+   - Argentina: punto separador de miles, coma decimal ("14.471,0744" = 14471.0744)
+   - "2,00" = 2 (cantidad), "9.012,3967" = 9012.3967 (precio)
+   - Devolvé números, no strings
+
+9. Descripciones
+   - Reemplazá comillas internas por (") para no romper el JSON
+   - Sin saltos de línea, todo en una sola línea
+   - Si la descripción está partida en varias líneas, juntalas con espacios`
 
 /** Intenta extraer el primer objeto JSON válido del texto */
 function extractJson(text: string): string {
@@ -70,7 +111,7 @@ export async function POST(req: NextRequest) {
     const base64 = buffer.toString('base64')
 
     const message = await client.messages.create({
-      model     : 'claude-opus-4-5',
+      model     : 'claude-opus-4-7',
       max_tokens: 16000,           // aumentado para facturas largas
       system    : SYSTEM_PROMPT,
       messages  : [{
