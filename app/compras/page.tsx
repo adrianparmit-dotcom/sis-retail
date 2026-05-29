@@ -69,6 +69,21 @@ function ConfianzaBadge({ nivel }: { nivel: ProductoCompra['nivel_confianza'] })
   return <span className="text-[9px] text-zinc-400 font-medium uppercase tracking-wide">— s/d</span>
 }
 
+function AbcBadge({ clase }: { clase: 'A' | 'B' | 'C' | null | undefined }) {
+  if (!clase) return null
+  const styles =
+    clase === 'A' ? 'bg-green-100 text-green-700 border-green-200' :
+    clase === 'B' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
+                    'bg-zinc-100 text-zinc-600 border-zinc-200'
+  const title =
+    clase === 'A' ? 'Clase A — top 70% de facturación (12m)' :
+    clase === 'B' ? 'Clase B — siguiente 20% de facturación (12m)' :
+                    'Clase C — 10% restante de facturación (12m)'
+  return (
+    <Badge className={`${styles} text-[10px] px-1.5 py-0 leading-4`} title={title}>{clase}</Badge>
+  )
+}
+
 function SortHeader({
   label, sk, current, dir, onSort, className,
 }: {
@@ -230,6 +245,7 @@ export default function ComprasPage() {
   const [scanMiss, setScanMiss] = useState(false)
   const [alertasHoy, setAlertasHoy] = useState<string[]>([])
   const [exportingPDF, setExportingPDF] = useState(false)
+  const [abcMap, setAbcMap] = useState<Map<string, 'A' | 'B' | 'C'>>(new Map())
 
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const missTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -286,10 +302,11 @@ export default function ComprasPage() {
 
     const load = async () => {
       try {
-        const [alertasRes, syncRes, barcodesRes, comprasData] = await Promise.all([
+        const [alertasRes, syncRes, barcodesRes, abcRes, comprasData] = await Promise.all([
           supabase.from('proveedores_config').select('nombre, dia_pedido').eq('dia_pedido', todayIso),
           supabase.from('productos').select('dux_sync_at').not('dux_sync_at', 'is', null).limit(1),
           supabase.from('productos').select('sku,codigo_barras'),
+          supabase.from('productos').select('id,clasificacion_abc').not('clasificacion_abc', 'is', null),
           fetchAllFromView<ProductoCompra>('v_compras_inteligentes'),
         ])
         if (alertasRes.data && alertasRes.data.length > 0) {
@@ -305,6 +322,12 @@ export default function ComprasPage() {
             (barcodesRes.data as { sku: string; codigo_barras: string | null }[])
               .filter(p => p.codigo_barras)
               .map(p => [p.codigo_barras!, p.sku])
+          ))
+        }
+        if (abcRes.data) {
+          setAbcMap(new Map(
+            (abcRes.data as { id: string; clasificacion_abc: 'A' | 'B' | 'C' }[])
+              .map(p => [p.id, p.clasificacion_abc])
           ))
         }
         setData(comprasData)
@@ -632,14 +655,17 @@ export default function ComprasPage() {
                     >
                       <TableCell className="font-mono text-xs text-zinc-500">{p.sku}</TableCell>
                       <TableCell className="max-w-xs">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="font-medium text-sm truncate cursor-help">{p.nombre ?? '—'}</div>
-                          </TooltipTrigger>
-                          <TooltipContent side="right" className="max-w-[520px] break-words whitespace-normal">
-                            {p.nombre}
-                          </TooltipContent>
-                        </Tooltip>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <AbcBadge clase={abcMap.get(p.id)} />
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="font-medium text-sm truncate cursor-help">{p.nombre ?? '—'}</div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-[520px] break-words whitespace-normal">
+                              {p.nombre}
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
                         {p.marca && <div className="text-xs text-zinc-400">{p.marca}</div>}
                       </TableCell>
                       <TableCell className="text-xs text-zinc-500">
