@@ -20,6 +20,7 @@ import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { parseFactura, calcPrecioVenta, detectProveedorType } from '@/lib/invoice-parsers'
+import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorToPDF, type DocumentoProveedor } from '@/lib/proveedor-doc'
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -428,6 +429,8 @@ export default function RecepcionFacturaPage() {
   const [priceExcelUrl, setPriceExcelUrl]     = useState<string | null>(null)
   const [priceExcelCount, setPriceExcelCount] = useState(0)
   const [loadingPdf, setLoadingPdf]           = useState(false)
+  const [docProveedor, setDocProveedor]       = useState<DocumentoProveedor | null>(null)
+  const [docCopied, setDocCopied]             = useState(false)
   const pdfInputRef                           = useRef<HTMLInputElement>(null)
 
   // ── Load products + SKU map ──────────────────────────────────
@@ -1176,6 +1179,17 @@ export default function RecepcionFacturaPage() {
       if (priceItems.length) lines.push('', `💰 PRECIOS A ACTUALIZAR EN DUX: ${priceItems.length} productos`)
 
       setDoneReport(lines.join('\n'))
+
+      // ── 7. Documento para el proveedor (4 categorías) ────────
+      const documento = buildDocumentoProveedor(items, {
+        proveedor      : factura.proveedor_nombre ?? '',
+        nroComprobante : factura.nro_comprobante ?? '',
+        fechaFactura   : factura.fecha ?? '',
+        sucursal       : sucursal.nombre,
+      })
+      setDocProveedor(documento)
+      setDocCopied(false)
+
       setStep('done')
     } catch (err) {
       alert('Error al confirmar: ' + (err as Error).message)
@@ -1707,6 +1721,124 @@ export default function RecepcionFacturaPage() {
                 <Download size={14} />Descargar Excel de precios
               </Button>
             </a>
+          </div>
+        )}
+
+        {/* Documento para el proveedor (4 categorías) */}
+        {docProveedor && (
+          <div>
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">📋 Documento para el proveedor</p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(documentoProveedorToText(docProveedor))
+                    setDocCopied(true)
+                    setTimeout(() => setDocCopied(false), 2000)
+                  }}
+                >
+                  {docCopied ? '✓ Copiado' : 'Copiar texto'}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => documentoProveedorToPDF(docProveedor)}
+                >
+                  <Download size={13} className="mr-1" />Descargar PDF
+                </Button>
+              </div>
+            </div>
+
+            <div className="bg-white border rounded-lg p-4 space-y-4">
+              {docProveedor.vencidos.length === 0 &&
+               docProveedor.proximosAVencer.length === 0 &&
+               docProveedor.faltantes.length === 0 &&
+               docProveedor.sobrantes.length === 0 && (
+                <p className="text-sm text-zinc-500 italic">
+                  Sin novedades — la recepción coincide con la factura.
+                </p>
+              )}
+
+              {docProveedor.vencidos.length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-red-700 uppercase tracking-wide mb-1.5">
+                    ⚠️ Vencidos al llegar ({docProveedor.vencidos.length})
+                  </p>
+                  <ul className="space-y-1 text-sm text-zinc-700">
+                    {docProveedor.vencidos.map((it, i) => (
+                      <li key={i} className="flex flex-wrap gap-x-2">
+                        <span className="font-mono text-xs bg-red-50 text-red-700 px-1.5 py-0.5 rounded">{it.sku}</span>
+                        <span>{it.nombre}</span>
+                        <span className="text-zinc-500">
+                          — {it.cantidad ?? it.cantidad_recibida} ud
+                          {it.fecha_vencimiento && ` (venc. ${it.fecha_vencimiento})`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {docProveedor.proximosAVencer.length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-orange-700 uppercase tracking-wide mb-1.5">
+                    ⏰ Próximos a vencer ({docProveedor.proximosAVencer.length})
+                  </p>
+                  <ul className="space-y-1 text-sm text-zinc-700">
+                    {docProveedor.proximosAVencer.map((it, i) => (
+                      <li key={i} className="flex flex-wrap gap-x-2">
+                        <span className="font-mono text-xs bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded">{it.sku}</span>
+                        <span>{it.nombre}</span>
+                        <span className="text-zinc-500">
+                          — {it.cantidad ?? it.cantidad_recibida} ud
+                          {it.fecha_vencimiento && ` (vencen ${it.fecha_vencimiento})`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {docProveedor.faltantes.length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-1.5">
+                    ❌ Faltantes ({docProveedor.faltantes.length})
+                  </p>
+                  <ul className="space-y-1 text-sm text-zinc-700">
+                    {docProveedor.faltantes.map((it, i) => (
+                      <li key={i} className="flex flex-wrap gap-x-2">
+                        <span className="font-mono text-xs bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded">{it.sku}</span>
+                        <span>{it.nombre}</span>
+                        <span className="text-zinc-500">
+                          — esperado: {it.cantidad_esperada}, recibido: {it.cantidad_recibida} (faltan {it.diferencia})
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {docProveedor.sobrantes.length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-1.5">
+                    ➕ Sobrantes ({docProveedor.sobrantes.length})
+                  </p>
+                  <ul className="space-y-1 text-sm text-zinc-700">
+                    {docProveedor.sobrantes.map((it, i) => (
+                      <li key={i} className="flex flex-wrap gap-x-2">
+                        <span className="font-mono text-xs bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">{it.sku}</span>
+                        <span>{it.nombre}</span>
+                        <span className="text-zinc-500">
+                          — esperado: {it.cantidad_esperada}, recibido: {it.cantidad_recibida} (sobran {it.diferencia})
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
           </div>
         )}
 
