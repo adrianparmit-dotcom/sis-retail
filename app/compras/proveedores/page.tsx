@@ -100,13 +100,14 @@ export default function ProveedoresConfigPage() {
     setLoading(false)
   }, [])
 
+  // Fetch + populate rows when loadAll changes (mount + manual refresh).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadAll() }, [loadAll])
 
   function setField(nombre: string, field: keyof Omit<RowState, 'dirty' | 'saving' | 'saved'>, value: string) {
     setRows(prev => ({ ...prev, [nombre]: { ...prev[nombre], [field]: value, dirty: true, saved: false } }))
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function setFieldAny(nombre: string, field: string, value: string) {
     setRows(prev => ({ ...prev, [nombre]: { ...prev[nombre], [field]: value, dirty: true, saved: false } }))
   }

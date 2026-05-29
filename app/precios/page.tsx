@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Printer, Search, X, TrendingUp, Eye, RefreshCw, Tag, Download, CheckSquare, Square } from 'lucide-react'
 
@@ -118,6 +118,8 @@ export default function PreciosPage() {
     setLoading(false)
   }, [sucursal])
 
+  // Fetch + populate when fetchData changes (mount + sucursal change).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData() }, [fetchData])
 
   const productosFiltrados = useMemo(() => {
@@ -140,7 +142,8 @@ export default function PreciosPage() {
   const toggleSeleccion = (id: string) => {
     setSeleccionados(prev => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }

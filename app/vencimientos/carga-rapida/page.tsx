@@ -46,9 +46,6 @@ function CargaRapidaContent() {
   const initialSku = searchParams.get('sku') ?? ''
 
   const barcodeRef = useRef<HTMLInputElement>(null)
-  const fechaAnioRef = useRef<HTMLInputElement>(null)
-  const fechaMesRef = useRef<HTMLInputElement>(null)
-  const fechaDiaRef = useRef<HTMLInputElement>(null)
   const cantidadRef = useRef<HTMLInputElement>(null)
 
   const [barcode, setBarcode] = useState(initialSku)
@@ -73,6 +70,7 @@ function CargaRapidaContent() {
   const [loadingOrden, setLoadingOrden] = useState(false)
 
   // Reset orden de trabajo when sucursal changes
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setOrdenTrabajo(null) }, [sucursalId])
 
   const fecha = useMemo(() => {
@@ -86,8 +84,12 @@ function CargaRapidaContent() {
   const isExpired = !!fecha && fecha < today
 
   // Reset confirmation whenever the selected date changes
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setConfirmVencido(false) }, [fecha])
 
+  // Mount-time init: if URL has ?sku=, fetch the product and clear date fields.
+  // Intentionally empty deps — should only run once at mount.
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (initialSku) {
       buscarProducto(initialSku)
@@ -98,7 +100,8 @@ function CargaRapidaContent() {
     } else {
       barcodeRef.current?.focus()
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   async function fetchStockPorSucursal(productoId: string) {
     const { data } = await supabase

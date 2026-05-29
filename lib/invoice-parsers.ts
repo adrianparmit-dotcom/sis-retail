@@ -158,13 +158,14 @@ export function parseDiet(text: string): ParsedFactura {
     // Need at least 3 trailing nums: CANT, P.UNIT, IMPORTE (BON is optional)
     if (trailingNums.length < 3) continue
 
+    // We use IMPORTE/CANT as the unit cost (already includes discounts).
+    // The supplier's declared P.UNIT is parsed-by-position but discarded.
     const importe  = parseArgNum(trailingNums[trailingNums.length - 1])
-    const punit    = parseArgNum(trailingNums[trailingNums.length - 2])
     const cant     = Math.round(parseArgNum(trailingNums[trailingNums.length - 3]))
 
     if (cant <= 0 || importe <= 0) continue
 
-    let descParts = rest.slice(0, descEnd)
+    const descParts = rest.slice(0, descEnd)
 
     // Check ** IVA indicator (can appear at start of desc or as separate token)
     let iva = 21

@@ -42,7 +42,6 @@ export function parseDuxInvoice(text: string): ParsedInvoice {
   const items: ParsedInvoiceItem[] = []
   // Deduplicate repeated page headers by comprobante number
   const seenComprobantes = new Set<string>()
-  let skipUntilNewComp = false
 
   for (const raw of lines) {
     const line = raw.trim()
@@ -52,14 +51,12 @@ export function parseDuxInvoice(text: string): ParsedInvoice {
     const matchComp = line.match(/^N[°º.]\s+(.+)$/i)
     if (matchComp) {
       const comp = matchComp[1].trim()
-      if (seenComprobantes.has(comp)) {
-        // Repeated page header — skip repeated header lines until items resume
-        skipUntilNewComp = true
-      } else {
+      if (!seenComprobantes.has(comp)) {
         seenComprobantes.add(comp)
         if (!comprobante) comprobante = comp
-        skipUntilNewComp = false
       }
+      // Repeated comprobante headers are simply ignored; items are detected
+      // independently below via parseItemLine, so no skip flag is needed.
       continue
     }
 
@@ -80,10 +77,9 @@ export function parseDuxInvoice(text: string): ParsedInvoice {
     // Skip table header rows
     if (/^(C[oó]d|Descripci[oó]n|Cant|Precio|Subtotal)/i.test(line)) continue
 
-    // Try to parse as item line (even during skipUntilNewComp — items resume right after header)
+    // Try to parse as item line
     const parsed = parseItemLine(line)
     if (parsed) {
-      skipUntilNewComp = false
       items.push({
         ...parsed,
         cantidad_recibida: 0,

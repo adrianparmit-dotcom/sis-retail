@@ -175,7 +175,7 @@ export async function exportOrdenPDF(rows: ProductoCompra[]) {
     doc.text(`FECHA: ${fecha}`, pageW - 14, 16, { align: 'right' })
 
     // ── Provider info section ────────────────────────
-    let y = 34
+    const y = 34
 
     doc.setDrawColor(200)
     doc.setLineWidth(0.3)

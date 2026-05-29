@@ -43,9 +43,11 @@ export function ProductPicker({
 
   useOutsideClick(containerRef, () => setOpen(false))
 
-  // Sync external value
+  // Sync external value (controlled-like usage from parent).
+  // Guard against redundant sets so we don't trigger a re-render storm.
   useEffect(() => {
-    if (value !== undefined) setQuery(value)
+    if (value !== undefined && value !== query) setQuery(value)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
   const filtered = query.trim().length < 1
@@ -61,6 +63,12 @@ export function ProductPicker({
           )
         })
         .slice(0, 60)
+
+  const handleSelect = useCallback((producto: ProductoStock) => {
+    setQuery(producto.nombre ?? producto.sku)
+    setOpen(false)
+    onSelect(producto)
+  }, [onSelect])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -79,14 +87,8 @@ export function ProductPicker({
         inputRef.current?.blur()
       }
     },
-    [query, filtered],
+    [query, filtered, handleSelect],
   )
-
-  const handleSelect = (producto: ProductoStock) => {
-    setQuery(producto.nombre ?? producto.sku)
-    setOpen(false)
-    onSelect(producto)
-  }
 
   const handleClear = () => {
     setQuery('')
@@ -172,7 +174,7 @@ export function ProductPicker({
 
       {open && query.length > 1 && filtered.length === 0 && (
         <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl px-4 py-3">
-          <p className="text-sm text-gray-400">Sin resultados para <span className="font-medium text-gray-700">"{query}"</span></p>
+          <p className="text-sm text-gray-400">Sin resultados para <span className="font-medium text-gray-700">&ldquo;{query}&rdquo;</span></p>
         </div>
       )}
     </div>

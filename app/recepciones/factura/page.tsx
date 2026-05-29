@@ -72,10 +72,15 @@ function DateSelector({ value, onChange }: { value: string; onChange: (v: string
   const [selD, setSelD] = useState(value.split('-')[2] ?? '')
   const [step, setStep] = useState<'year'|'month'|'day'|null>(null)
 
+  // Sync state to the external `value` prop. Necessary because the picker keeps
+  // 3 separate pieces of state (year/month/day) that must stay in sync with the
+  // single ISO string from the parent. Skip render-time set when value matches.
   useEffect(() => {
-    if (!value) { setSelY(''); setSelM(''); setSelD(''); return }
-    const [y, m, d] = value.split('-')
-    setSelY(y ?? ''); setSelM(m ?? ''); setSelD(d ?? '')
+    const [y, m, d] = (value || '').split('-')
+    if ((y ?? '') !== selY) setSelY(y ?? '')
+    if ((m ?? '') !== selM) setSelM(m ?? '')
+    if ((d ?? '') !== selD) setSelD(d ?? '')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
   const getDays = () => !selY || !selM ? [] :
@@ -443,14 +448,6 @@ export default function RecepcionFacturaPage() {
     load()
   }, [])
 
-  // Load borrador from URL if present
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const bid = params.get('borrador')
-    if (bid) loadBorrador(bid)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   async function loadBorrador(id: string) {
     const [recRes, itemsRes] = await Promise.all([
       supabase.from('recepciones').select('*').eq('id', id).single(),
@@ -567,6 +564,14 @@ export default function RecepcionFacturaPage() {
     setBorradorId(id)
     setStep('review')
   }
+
+  // Load borrador from URL if present (declared after loadBorrador so it's not used-before-declared)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const bid = params.get('borrador')
+    if (bid) loadBorrador(bid)
+  }, [])
 
   // Fetch margin + iva_default when factura changes; if iva_default is set,
   // apply it to any item that still has the parser default (21).
@@ -1662,7 +1667,7 @@ export default function RecepcionFacturaPage() {
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-4">
             <p className="text-sm font-semibold text-emerald-800 mb-1">🌾 {granelItems.length} productos granel — ir a fraccionar</p>
             <p className="text-xs text-emerald-700 mb-3">
-              La factura está registrada en Dux. Ahora fraccioná la mercadería y <strong>volvé a esta recepción para actualizar las cantidades recibidas</strong> (botón "Editar borrador").
+              La factura está registrada en Dux. Ahora fraccioná la mercadería y <strong>volvé a esta recepción para actualizar las cantidades recibidas</strong> (botón &ldquo;Editar borrador&rdquo;).
             </p>
             <ul className="space-y-1 text-xs text-emerald-800 mb-3">
               {granelItems.map((g, i) => (

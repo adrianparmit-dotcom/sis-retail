@@ -335,7 +335,7 @@ export default function FraccionamientoPage() {
 
             {derivados.length === 0 ? (
               <p className="text-sm text-zinc-400 py-3 text-center border rounded-md">
-                Hacé click en "Agregar" para añadir productos derivados
+                Hacé click en &ldquo;Agregar&rdquo; para añadir productos derivados
               </p>
             ) : (
               <div className="space-y-2">

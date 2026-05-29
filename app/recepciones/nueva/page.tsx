@@ -43,10 +43,14 @@ function DateSelector({ value, onChange }: { value: string; onChange: (v: string
   const [selD, setSelD] = useState(initParts[2] || '')
   const [cascadeStep, setCascadeStep] = useState<'year' | 'month' | 'day' | null>(null)
 
+  // Sync internal year/month/day state with the external ISO `value` prop.
+  // Guard against redundant sets so we don't trigger render storms.
   useEffect(() => {
-    if (!value) { setSelY(''); setSelM(''); setSelD(''); return }
-    const [y, m, d] = value.split('-')
-    setSelY(y || ''); setSelM(m || ''); setSelD(d || '')
+    const [y, m, d] = (value || '').split('-')
+    if ((y || '') !== selY) setSelY(y || '')
+    if ((m || '') !== selM) setSelM(m || '')
+    if ((d || '') !== selD) setSelD(d || '')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
   function getDays() {
@@ -142,7 +146,8 @@ export default function NuevaRecepcionPage() {
   const [invoice, setInvoice] = useState<ParsedInvoice | null>(null)
   const [items, setItems] = useState<ParsedInvoiceItem[]>([])
   const [saving, setSaving] = useState(false)
-  const [recepcionId, setRecepcionId] = useState<string | null>(null)
+  // recepcionId was tracked here but never read after save; removed to silence the unused-var warning.
+  // If you need to navigate to /recepciones/[id] after confirming, re-add and use it.
   const [informe, setInforme] = useState('')
   const [borradorId, setBorradorId] = useState<string | null>(null)
   const [borradorSavedAt, setBorradorSavedAt] = useState<string | null>(null)
@@ -176,14 +181,6 @@ export default function NuevaRecepcionPage() {
       ))
     }
     loadProductos()
-  }, [])
-
-  // Detect ?borrador=<id> in URL and load draft
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const bid = params.get('borrador')
-    if (bid) loadBorrador(bid)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function loadBorrador(id: string) {
@@ -225,6 +222,14 @@ export default function NuevaRecepcionPage() {
     setBorradorId(id)
     setStep('review')
   }
+
+  // Detect ?borrador=<id> in URL and load draft (declared after loadBorrador)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const bid = params.get('borrador')
+    if (bid) loadBorrador(bid)
+  }, [])
 
   function handleParsear() {
     if (!texto.trim()) return
@@ -351,8 +356,6 @@ export default function NuevaRecepcionPage() {
         if (recError || !recData) throw new Error(recError?.message ?? 'Error creando recepcion')
         recId = (recData as { id: string }).id
       }
-
-      setRecepcionId(recId)
 
       for (const item of items) {
         await supabase.from('recepcion_items').insert({

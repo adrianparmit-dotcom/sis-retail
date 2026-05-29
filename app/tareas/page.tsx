@@ -134,10 +134,11 @@ export default function TareasPage() {
   const [sucursalId,     setSucursalId]     = useState<string | null>(null)
   const [showSucSelect,  setShowSucSelect]  = useState(false)
 
+  // Restore sucursal from localStorage on mount.
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved && SUCURSALES.find(s => s.id === saved)) {
-      setSucursalId(saved)
+      setSucursalId(saved) // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [])
 
@@ -187,9 +188,9 @@ export default function TareasPage() {
       })
   }, [fecha, sucursalId])
 
-  // ── Load sistema counts ──
+  // ── Load sistema counts (sets loading + counts when deps change) ──
   useEffect(() => {
-    setLoadingSist(true)
+    setLoadingSist(true) // eslint-disable-line react-hooks/set-state-in-effect
     Promise.allSettled([
       supabase.from('v_reconciliacion').select('*', { count: 'exact', head: true }).not('estado', 'eq', 'ok'),
       supabase.from('v_reposicion_dashboard').select('*', { count: 'exact', head: true }).lte('soho1_local', 2),
@@ -216,7 +217,8 @@ export default function TareasPage() {
     const isDone = done.has(tareaId)
     setDone(prev => {
       const next = new Set(prev)
-      isDone ? next.delete(tareaId) : next.add(tareaId)
+      if (isDone) next.delete(tareaId)
+      else next.add(tareaId)
       return next
     })
     if (isDone) {
