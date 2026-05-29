@@ -64,6 +64,8 @@ export default function UbicacionesPage() {
   const [scanHit, setScanHit] = useState(false)
   const missTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Ref to the card currently being edited (for click-outside to deselect)
+  const editingCardRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => () => {
     if (missTimerRef.current) clearTimeout(missTimerRef.current)
@@ -313,6 +315,18 @@ export default function UbicacionesPage() {
     setEditingId(null); setSearchProd(''); setAddingProd(null); setAddQty(''); setQtyEdits({})
   }
 
+  // Click fuera del cajón en edición → deseleccionar
+  useEffect(() => {
+    if (!editingId) return
+    function onDocMouseDown(e: MouseEvent) {
+      if (editingCardRef.current && !editingCardRef.current.contains(e.target as Node)) {
+        closeEdit()
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [editingId])
+
   function switchTab(t: 'pieza' | 'deposito') {
     setTab(t); setSearch(''); closeEdit()
   }
@@ -411,6 +425,7 @@ export default function UbicacionesPage() {
                     return (
                       <div
                         key={c.id}
+                        ref={isEditing ? editingCardRef : undefined}
                         onClick={() => { if (!isEditing) setEditingId(c.id) }}
                         className={`rounded-lg border p-3 transition-all select-none ${
                           dimmed ? 'opacity-20 pointer-events-none' : ''
@@ -498,15 +513,16 @@ export default function UbicacionesPage() {
                         {/* VIEW MODE */}
                         {!isEditing && (
                           ocupado
-                            ? <ul className="space-y-0.5">
+                            ? <ul className="space-y-1">
                                 {prods.map(cp => (
-                                  <li key={cp.id} className="flex items-baseline justify-between gap-1 min-w-0">
-                                    <span className="text-[11px] text-zinc-700 leading-tight truncate flex-1">
+                                  <li key={cp.id} className="flex items-start justify-between gap-1 min-w-0"
+                                    title={cp.producto.nombre ?? cp.producto.sku}>
+                                    <span className="text-[11px] text-zinc-700 leading-snug line-clamp-2 flex-1">
                                       {cp.producto.nombre ?? cp.producto.sku}
                                     </span>
                                     {cp.cantidad > 0
-                                      ? <span className="text-[10px] text-zinc-400 flex-shrink-0 font-mono">{cp.cantidad}u</span>
-                                      : <span className="text-[10px] text-orange-400 flex-shrink-0 font-medium">—</span>
+                                      ? <span className="text-[10px] text-zinc-400 flex-shrink-0 font-mono mt-0.5">{cp.cantidad}u</span>
+                                      : <span className="text-[10px] text-orange-400 flex-shrink-0 font-medium mt-0.5">—</span>
                                     }
                                   </li>
                                 ))}
@@ -524,8 +540,9 @@ export default function UbicacionesPage() {
                                 {prods.map(cp => {
                                   const draftQty = qtyEdits[cp.id] ?? String(cp.cantidad)
                                   return (
-                                    <li key={cp.id} className="flex items-center gap-1.5 bg-white rounded px-1.5 py-1 border border-zinc-100">
-                                      <span className="flex-1 min-w-0 text-[11px] text-zinc-700 leading-tight truncate">
+                                    <li key={cp.id} className="flex items-center gap-1.5 bg-white rounded px-1.5 py-1 border border-zinc-100"
+                                      title={cp.producto.nombre ?? cp.producto.sku}>
+                                      <span className="flex-1 min-w-0 text-[11px] text-zinc-700 leading-snug line-clamp-2">
                                         {cp.producto.nombre ?? cp.producto.sku}
                                       </span>
                                       <div className="flex items-center gap-0.5 flex-shrink-0">
