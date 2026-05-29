@@ -12,6 +12,7 @@ import { SkeletonCard, SkeletonTable } from '@/components/ui/skeleton'
 import { Pagination } from '@/components/ui/pagination'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { usePagination } from '@/lib/hooks/use-pagination'
+import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
 import { GONDOLA_MAX_UNITS } from '@/lib/constants'
 import { ArrowRight, ShoppingCart, Shuffle, MoveHorizontal, CheckCircle, Download, Search, X } from 'lucide-react'
 
@@ -182,31 +183,21 @@ export default function ReposicionPage() {
   const { paged, page, setPage, total, pageSize } = usePagination(filtered)
   useEffect(() => { setPage(1) }, [filtered]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function exportarCSV() {
+  function exportarExcel() {
     type EnrichedRow = (typeof enriched)[number]
-    const rows: (string | number)[][] = [
-      ['SKU', 'Nombre', 'S1 Local', 'S1 Pieza', 'S2 Local', 'S2 Depósito', 'Vel/día', 'Cob S1 (días)', 'Acción', 'Instrucción'],
-      ...filtered.map((r: EnrichedRow) => [
-        r.sku,
-        r.nombre ?? r.sku,
-        r.soho1_local,
-        r.soho1_pieza,
-        r.soho2_local,
-        r.soho2_deposito,
-        r.ventas_prom_dia > 0 ? Number(r.ventas_prom_dia.toFixed(2)) : 0,
-        r.ventas_prom_dia > 0 ? Math.round(r.soho1_local / r.ventas_prom_dia) : '',
-        ACCION_CONFIG[r.rec.accion].label,
-        r.rec.detalle,
-      ]),
+    const cols: ColumnaExport<EnrichedRow>[] = [
+      { header: 'SKU',           value: r => r.sku },
+      { header: 'Nombre',        value: r => r.nombre ?? r.sku },
+      { header: 'S1 Local',      value: r => r.soho1_local },
+      { header: 'S1 Pieza',      value: r => r.soho1_pieza },
+      { header: 'S2 Local',      value: r => r.soho2_local },
+      { header: 'S2 Depósito',   value: r => r.soho2_deposito },
+      { header: 'Vel/día',       value: r => r.ventas_prom_dia > 0 ? Number(r.ventas_prom_dia.toFixed(2)) : 0 },
+      { header: 'Cob S1 (días)', value: r => r.ventas_prom_dia > 0 ? Math.round(r.soho1_local / r.ventas_prom_dia) : '' },
+      { header: 'Acción',        value: r => ACCION_CONFIG[r.rec.accion].label },
+      { header: 'Instrucción',   value: r => r.rec.detalle },
     ]
-    const csv = rows.map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `reposicion-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    exportTablaXlsx('reposicion', cols, filtered, 'Reposición')
   }
 
   function handleSearchKey(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -334,12 +325,12 @@ export default function ReposicionPage() {
         </div>
         <span className="text-sm text-zinc-400">{loading ? '—' : `${total} productos`}</span>
         <button
-          onClick={exportarCSV}
+          onClick={exportarExcel}
           disabled={loading || filtered.length === 0}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50 disabled:opacity-40 transition-colors"
         >
           <Download size={13} />
-          Exportar CSV
+          Exportar Excel
         </button>
       </div>
 

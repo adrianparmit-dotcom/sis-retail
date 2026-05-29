@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Printer, Search, X, TrendingUp, Eye, RefreshCw, Tag, Download, CheckSquare, Square } from 'lucide-react'
+import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
 
 // ─── Types ───────────────────────────────────────────────────────────
 interface Producto {
@@ -166,21 +167,16 @@ export default function PreciosPage() {
     setMarkingVisto(false)
   }
 
-  const exportarAumentosCSV = () => {
-    const rows = [
-      ['SKU','Nombre','Precio anterior','Precio nuevo','Variación %','Detectado'],
-      ...cambios.map(c => [
-        c.sku, c.nombre, c.precio_anterior, c.precio_nuevo,
-        `${c.variacion_pct?.toFixed(2)}%`,
-        new Date(c.detectado_at).toLocaleString('es-AR'),
-      ]),
+  const exportarAumentosExcel = () => {
+    const cols: ColumnaExport<PriceChange>[] = [
+      { header: 'SKU',             value: c => c.sku },
+      { header: 'Nombre',          value: c => c.nombre },
+      { header: 'Precio anterior', value: c => c.precio_anterior },
+      { header: 'Precio nuevo',    value: c => c.precio_nuevo },
+      { header: 'Variación %',     value: c => c.variacion_pct != null ? Number(c.variacion_pct.toFixed(2)) : '' },
+      { header: 'Detectado',       value: c => new Date(c.detectado_at).toLocaleString('es-AR') },
     ]
-    const csv  = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href = url; a.download = `aumentos-${new Date().toISOString().slice(0,10)}.csv`
-    a.click(); URL.revokeObjectURL(url)
+    exportTablaXlsx('aumentos-precios', cols, cambios, 'Aumentos')
   }
 
   return (
@@ -367,8 +363,8 @@ export default function PreciosPage() {
               <p className="text-sm text-zinc-500">{cambios.length} cambios detectados por el sync de Dux</p>
               <div className="flex gap-2">
                 {cambios.length > 0 && (
-                  <Button variant="outline" size="sm" onClick={exportarAumentosCSV} className="gap-1.5">
-                    <Download size={14} /> Exportar CSV
+                  <Button variant="outline" size="sm" onClick={exportarAumentosExcel} className="gap-1.5">
+                    <Download size={14} /> Exportar Excel
                   </Button>
                 )}
                 {sinVer > 0 && (

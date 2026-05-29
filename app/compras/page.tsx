@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { exportOrdenCSV, exportOrdenPDF } from '@/lib/export-orden'
+import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@/components/ui/tooltip'
@@ -150,19 +151,15 @@ function ProviderCombobox({
               ))}
             </div>
           )}
-          {selected.size >= 2 && (
-            <p className="px-3 py-1 text-xs text-zinc-400 border-b border-foreground/10">Máximo 2 proveedores seleccionados</p>
-          )}
           <div className="max-h-52 overflow-y-auto py-1">
             {filteredList.length === 0
               ? <p className="text-xs text-zinc-400 px-3 py-2">Sin resultados</p>
               : filteredList.map(p => {
                 const checked = selected.has(p)
-                const disabled = !checked && selected.size >= 2
                 return (
-                  <button key={p} type="button" disabled={disabled} onClick={() => onToggle(p)}
+                  <button key={p} type="button" onClick={() => onToggle(p)}
                     className={`w-full text-left px-3 py-1.5 text-sm rounded-md transition-colors truncate ${
-                      checked ? 'bg-zinc-900 text-white' : disabled ? 'text-zinc-300 cursor-not-allowed' : 'hover:bg-zinc-50'
+                      checked ? 'bg-zinc-900 text-white' : 'hover:bg-zinc-50'
                     }`}>{p}
                   </button>
                 )
@@ -297,6 +294,26 @@ export default function ComprasPage() {
     try { await exportOrdenPDF(filtered) } finally { setExportingPDF(false) }
   }
 
+  function handleExportExcel() {
+    const cols: ColumnaExport<ProductoCompra>[] = [
+      { header: 'SKU',            value: p => p.sku },
+      { header: 'Producto',       value: p => p.nombre ?? '' },
+      { header: 'Proveedor',      value: p => p.proveedor_nombre ?? '' },
+      { header: 'Categoría',      value: p => p.categoria ?? '' },
+      { header: 'Stock actual',   value: p => p.stock_actual ?? 0 },
+      { header: 'Ventas 30d',     value: p => p.ventas_30d ?? 0 },
+      { header: 'Vel. diaria',    value: p => p.vel_diaria ?? 0 },
+      { header: 'Días cobertura', value: p => p.dias_cobertura ?? 0 },
+      { header: 'Sugerencia',     value: p => sugerenciaEfectiva(p) },
+      { header: 'Sug. kg (granel)', value: p => p.es_granel ? (p.sugerencia_kg ?? 0) : '' },
+      { header: 'Costo unit.',    value: p => p.costo ?? 0 },
+      { header: 'Inversión',      value: p => p.inversion_sugerida ?? 0 },
+      { header: 'Confianza',      value: p => p.nivel_confianza ?? '' },
+      { header: 'Motivos',        value: p => p.motivos ?? '' },
+    ]
+    exportTablaXlsx('compras', cols, filtered, 'Compras')
+  }
+
   useEffect(() => {
     const todayIso = new Date().getDay() === 0 ? 7 : new Date().getDay()
 
@@ -307,7 +324,7 @@ export default function ComprasPage() {
           supabase.from('productos').select('dux_sync_at').not('dux_sync_at', 'is', null).limit(1),
           supabase.from('productos').select('sku,codigo_barras'),
           supabase.from('productos').select('id,clasificacion_abc').not('clasificacion_abc', 'is', null),
-          fetchAllFromView<ProductoCompra>('v_compras_inteligentes'),
+          fetchAllFromView<ProductoCompra>('v_compras_inteligentes_v4'),
         ])
         if (alertasRes.data && alertasRes.data.length > 0) {
           setAlertasHoy((alertasRes.data as { nombre: string }[]).map(r => r.nombre))
@@ -560,6 +577,11 @@ export default function ComprasPage() {
         </Select>
         <span className="text-sm text-zinc-400 self-center">{loading ? '—' : `${total} productos`}</span>
         <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" className="flex items-center gap-1.5"
+            onClick={handleExportExcel} disabled={filtered.length === 0 || loading}>
+            <Download size={14} />
+            Excel
+          </Button>
           <Button variant="outline" size="sm" className="flex items-center gap-1.5"
             onClick={() => exportOrdenCSV(filtered)} disabled={filtered.length === 0 || loading}>
             <Download size={14} />

@@ -3,9 +3,10 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
-import { Pencil, X } from 'lucide-react'
+import { Pencil, X, Download } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Vencimiento, ProductoStock } from '@/lib/types'
+import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -138,6 +139,20 @@ export default function VencimientosPage() {
   const { paged: pagedVenc, page: pageVenc, setPage: setPageVenc, total: totalVenc, pageSize } = usePagination(filteredVenc)
   const { paged: pagedPend, page: pagePend, setPage: setPagePend, total: totalPend } = usePagination(filteredPend)
 
+  function handleExportExcel() {
+    const cols: ColumnaExport<Vencimiento>[] = [
+      { header: 'SKU',              value: v => v.sku },
+      { header: 'Producto',         value: v => v.nombre ?? '' },
+      { header: 'Categoría',        value: v => v.categoria ?? '' },
+      { header: 'Sucursal',         value: v => v.sucursal },
+      { header: 'Fecha vencimiento', value: v => v.fecha_vencimiento ?? '' },
+      { header: 'Cantidad',         value: v => v.cantidad },
+      { header: 'Días para vencer', value: v => v.dias_para_vencer ?? '' },
+      { header: 'Estado',           value: v => ESTADO_CONFIG[v.estado].label },
+    ]
+    exportTablaXlsx('vencimientos', cols, filteredVenc, 'Vencimientos')
+  }
+
   useEffect(() => { setPageVenc(1) }, [filteredVenc]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setPagePend(1) }, [filteredPend]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -226,6 +241,9 @@ export default function VencimientosPage() {
           <p className="text-sm text-zinc-500 mt-0.5">Gestión de fechas — primero en vencer, primero en salir</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportExcel} disabled={filteredVenc.length === 0}>
+            <Download size={14} /> Excel
+          </Button>
           <Link href="/vencimientos/carga-rapida">
             <Button variant="outline" size="sm">Carga rápida</Button>
           </Link>

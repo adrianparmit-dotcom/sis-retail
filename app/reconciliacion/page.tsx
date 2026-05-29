@@ -5,7 +5,10 @@ import { supabase } from '@/lib/supabase'
 import type { ReconciliacionItem } from '@/lib/types'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
+import { Download } from 'lucide-react'
 
 const ESTADO_CONFIG: Record<ReconciliacionItem['estado_reconciliacion'], { label: string; className: string }> = {
   ok:        { label: 'OK',        className: 'bg-green-100 text-green-700 border-green-200' },
@@ -19,6 +22,12 @@ export default function ReconciliacionPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filtroEstado, setFiltroEstado] = useState<string>('todos')
+  const [filtroCategoria, setFiltroCategoria] = useState<string>('todas')
+
+  const categorias = useMemo(
+    () => [...new Set(data.map(d => d.categoria).filter(Boolean))].sort() as string[],
+    [data],
+  )
 
   useEffect(() => {
     async function fetchAll() {
@@ -54,9 +63,23 @@ export default function ReconciliacionPage() {
     return data.filter(d => {
       if (search && !`${d.nombre} ${d.sku}`.toLowerCase().includes(search.toLowerCase())) return false
       if (filtroEstado !== 'todos' && d.estado_reconciliacion !== filtroEstado) return false
+      if (filtroCategoria !== 'todas' && d.categoria !== filtroCategoria) return false
       return true
     })
-  }, [data, search, filtroEstado])
+  }, [data, search, filtroEstado, filtroCategoria])
+
+  function handleExportExcel() {
+    const cols: ColumnaExport<ReconciliacionItem>[] = [
+      { header: 'SKU',             value: d => d.sku },
+      { header: 'Producto',        value: d => d.nombre ?? '' },
+      { header: 'Categoría',       value: d => d.categoria ?? '' },
+      { header: 'Stock Dux',       value: d => d.stock_dux },
+      { header: 'Con vencimiento', value: d => d.cantidad_vencimientos },
+      { header: 'Diferencia',      value: d => d.diferencia },
+      { header: 'Estado',          value: d => ESTADO_CONFIG[d.estado_reconciliacion].label },
+    ]
+    exportTablaXlsx('reconciliacion', cols, filtered, 'Reconciliación')
+  }
 
   const pct = (n: number, total: number) => total === 0 ? 0 : Math.round((n / total) * 100)
 
@@ -125,7 +148,20 @@ export default function ReconciliacionPage() {
             </button>
           ))}
         </div>
+        <select
+          value={filtroCategoria}
+          onChange={e => setFiltroCategoria(e.target.value)}
+          className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none hover:bg-zinc-50"
+        >
+          <option value="todas">Todas las categorías</option>
+          {categorias.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
         <span className="text-sm text-zinc-400 self-center">{filtered.length} productos</span>
+        <Button variant="outline" size="sm" className="ml-auto flex items-center gap-1.5"
+          onClick={handleExportExcel} disabled={filtered.length === 0 || loading}>
+          <Download size={14} />
+          Excel
+        </Button>
       </div>
 
       {/* Table */}
