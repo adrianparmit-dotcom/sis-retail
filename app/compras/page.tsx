@@ -289,9 +289,11 @@ export default function ComprasPage() {
     }
   }
 
+  const entregaFiltro = sucursal === 'soho1' ? 'SOHO 1' : sucursal === 'soho2' ? 'SOHO 2' : null
+
   async function handleExportPDF() {
     setExportingPDF(true)
-    try { await exportOrdenPDF(filtered) } finally { setExportingPDF(false) }
+    try { await exportOrdenPDF(filtered, entregaFiltro) } finally { setExportingPDF(false) }
   }
 
   function handleExportExcel() {
@@ -299,6 +301,7 @@ export default function ComprasPage() {
       { header: 'SKU',            value: p => p.sku },
       { header: 'Producto',       value: p => p.nombre ?? '' },
       { header: 'Proveedor',      value: p => p.proveedor_nombre ?? '' },
+      { header: 'Sucursal',       value: p => p.location_nombre ?? 'Global' },
       { header: 'Categoría',      value: p => p.categoria ?? '' },
       { header: 'Stock actual',   value: p => p.stock_actual ?? 0 },
       { header: 'Ventas 30d',     value: p => p.ventas_30d ?? 0 },
@@ -583,7 +586,7 @@ export default function ComprasPage() {
             Excel
           </Button>
           <Button variant="outline" size="sm" className="flex items-center gap-1.5"
-            onClick={() => exportOrdenCSV(filtered)} disabled={filtered.length === 0 || loading}>
+            onClick={() => exportOrdenCSV(filtered, entregaFiltro)} disabled={filtered.length === 0 || loading}>
             <Download size={14} />
             CSV
           </Button>

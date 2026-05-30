@@ -30,22 +30,35 @@ function calcIVA(p: ProductoCompra, cant: number): number {
   return Math.round(subtotal * (p.iva_porcentaje / 100) * 100) / 100
 }
 
-// Group rows by provider, only those with a suggestion
-function groupByProvider(rows: ProductoCompra[]): Map<string, ProductoCompra[]> {
-  const map = new Map<string, ProductoCompra[]>()
+// One order block per (provider, sucursal). For global providers `sucursal` is
+// null and there's a single block; for per-sucursal providers (e.g. Karen
+// Previotto) the view returns 2 rows per SKU, so we split into "SOHO 1" /
+// "SOHO 2" blocks — each gets delivered to its own store.
+interface OrdenGrupo {
+  proveedor: string
+  sucursal: string | null
+  items: ProductoCompra[]
+}
+
+function groupForOrden(rows: ProductoCompra[]): OrdenGrupo[] {
+  const map = new Map<string, OrdenGrupo>()
   const sorted = [...rows].sort((a, b) => {
     const pa = a.proveedor_nombre ?? 'ZZZ'
     const pb = b.proveedor_nombre ?? 'ZZZ'
-    return pa.localeCompare(pb, 'es') || a.sku.localeCompare(b.sku)
+    const sa = a.location_nombre ?? ''
+    const sb = b.location_nombre ?? ''
+    return pa.localeCompare(pb, 'es') || sa.localeCompare(sb, 'es') || a.sku.localeCompare(b.sku)
   })
   for (const p of sorted) {
     const sug = sugerenciaEfectiva(p)
     if (sug <= 0) continue
     const prov = p.proveedor_nombre ?? 'Sin proveedor'
-    if (!map.has(prov)) map.set(prov, [])
-    map.get(prov)!.push(p)
+    const suc = p.location_nombre ?? null
+    const key = suc ? `${prov}__${suc}` : prov
+    if (!map.has(key)) map.set(key, { proveedor: prov, sucursal: suc, items: [] })
+    map.get(key)!.items.push(p)
   }
-  return map
+  return [...map.values()]
 }
 
 // ─────────────────────────────────────────────────────
@@ -58,17 +71,23 @@ function esc(val: string | number): string {
   return s
 }
 
-export function exportOrdenCSV(rows: ProductoCompra[]) {
-  const groups = groupByProvider(rows)
+// `entregaDefault` is the sucursal selected in the page filter ('SOHO 1' /
+// 'SOHO 2' / null). It sets the delivery location for global-provider blocks
+// (which have no sucursal of their own) so a "SOHO 2" order says SOHO 2.
+export function exportOrdenCSV(rows: ProductoCompra[], entregaDefault: string | null = null) {
+  const groups = groupForOrden(rows)
   const fecha = todayStr()
   const lines: string[] = ['sep=;']
 
   lines.push(esc('ORDEN DE COMPRA — SOHO') + ';' + esc(`FECHA: ${fecha}`) + ';' + ';'.repeat(7))
   lines.push(';'.repeat(9))
 
-  for (const [proveedor, items] of groups) {
-    // Provider header
-    lines.push(esc(`PROVEEDOR: ${proveedor}`) + ';' + ';'.repeat(8))
+  for (const { proveedor, sucursal, items } of groups) {
+    // Per-store providers carry their own sucursal; for global ones fall back
+    // to the active page filter.
+    const lugar = sucursal ?? entregaDefault
+    const titulo = lugar ? `PROVEEDOR: ${proveedor} — ${lugar}` : `PROVEEDOR: ${proveedor}`
+    lines.push(esc(titulo) + ';' + ';'.repeat(8))
     lines.push('')
 
     // Column headers
@@ -124,19 +143,22 @@ export function exportOrdenCSV(rows: ProductoCompra[]) {
 // PDF Export — Orden de Compra per provider
 // ─────────────────────────────────────────────────────
 
-export async function exportOrdenPDF(rows: ProductoCompra[]) {
+export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: string | null = null) {
   // Dynamic import so the 300KB bundle only loads when clicked
   const { jsPDF } = await import('jspdf')
   const autoTable = (await import('jspdf-autotable')).default
 
-  const groups = groupByProvider(rows)
+  const groups = groupForOrden(rows)
   const fecha = todayStr()
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   let firstPage = true
 
-  for (const [proveedor, items] of groups) {
+  for (const { proveedor, sucursal, items } of groups) {
     if (!firstPage) doc.addPage()
+    // Per-store providers deliver to their own sucursal; global providers use
+    // the active page filter (or SOHO 1 when no filter is set).
+    const lugarEntrega = sucursal ?? entregaDefault ?? 'SOHO 1'
     firstPage = false
 
     const pageW = doc.internal.pageSize.getWidth()
@@ -191,7 +213,7 @@ export async function exportOrdenPDF(rows: ProductoCompra[]) {
       ['TELÉFONO:', ''],
       ['MONEDA:', 'PESOS'],
       ['FECHA ENTREGA:', ''],
-      ['LUGAR ENTREGA:', 'SOHO 1'],
+      ['LUGAR ENTREGA:', lugarEntrega],
     ]
     const infoRight = [
       ['IVA:', 'RESPONSABLE INSCRIPTO'],
