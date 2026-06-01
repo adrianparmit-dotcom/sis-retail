@@ -1107,7 +1107,11 @@ export default function RecepcionFacturaPage() {
       const duxItems = items.filter(i => i.producto_sku && i.cantidad > 0)
       const provId   = items.find(i => i.producto_id_dux)?.producto_id_dux
 
-      if (duxItems.length > 0 && provId) {
+      if (duxItems.length === 0) {
+        setDuxError('La compra NO se cargó en Dux: ningún ítem tiene un SKU del sistema asignado. Cargala manualmente en Dux.')
+      } else if (!provId) {
+        setDuxError('La compra NO se cargó en Dux: ninguno de los productos asignados tiene proveedor_id_dux. Asociá el proveedor a estos SKUs en Dux (o cargá la compra manualmente).')
+      } else {
         const duxPayload = {
           id_sucursal     : sucursal.dux_sucursal,
           id_proveedor    : provId,
