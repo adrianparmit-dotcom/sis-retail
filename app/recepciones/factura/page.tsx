@@ -1196,7 +1196,7 @@ export default function RecepcionFacturaPage() {
   // ── Confirm ───────────────────────────────────────────────────
 
   // ── Dux compras helper ──────────────────────────────────────
-  async function postDuxCompra(payload: Record<string, unknown>): Promise<{ msg: string } | null> {
+  async function postDuxCompra(payload: Record<string, unknown>): Promise<{ msg: string; detail?: string } | null> {
     const res = await fetch('/api/dux/compras', {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1209,8 +1209,13 @@ export default function RecepcionFacturaPage() {
              ?? (duxResp?.mensaje as string)
              ?? (e.error as string)
              ?? 'error desconocido'
-    const hint = res.status === 502 ? ' — puede ser comprobante duplicado si ya estaba en Dux' : ''
-    return { msg: `Dux ${res.status}: ${msg}${hint}` }
+    // Build detail string for debugging: show which items were sent
+    const payloadSent = e.payload_sent as Record<string, unknown> | undefined
+    const prods = payloadSent?.productos as Array<{id_item:string; cantidad:number; precio_unitario:number}> | undefined
+    const detail = prods
+      ? `Items enviados a Dux: ${prods.map(p => `${p.id_item} (cant:${p.cantidad} precio:${p.precio_unitario})`).join(' | ')}`
+      : undefined
+    return { msg: `Dux ${res.status}: ${msg}`, detail }
   }
 
   async function retryDux() {
@@ -1219,7 +1224,7 @@ export default function RecepcionFacturaPage() {
     setDuxError(null)
     const err = await postDuxCompra(duxPayloadRetry)
     if (err) {
-      setDuxError(err.msg)
+      setDuxError(err.msg + (err.detail ? `\n\n${err.detail}` : ''))
     } else {
       setDuxPayloadRetry(null)
     }
@@ -1412,7 +1417,7 @@ export default function RecepcionFacturaPage() {
 
         const duxRes = await postDuxCompra(duxPayload)
         if (duxRes) {
-          setDuxError(duxRes.msg)
+          setDuxError(duxRes.msg + (duxRes.detail ? `\n\n${duxRes.detail}` : ''))
           setDuxPayloadRetry(duxPayload)
         }
       }

@@ -59,9 +59,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (!Array.isArray(payload['productos']) || (payload['productos'] as unknown[]).length === 0) {
+  // Filter productos: remove items with quantity <= 0 or price <= 0 (Dux rejects these)
+  type DuxProducto = { id_item: string; cantidad: number; precio_unitario: number }
+  const productosRaw = payload['productos'] as DuxProducto[]
+  const productosFiltrados = productosRaw.filter(p => p.cantidad > 0 && p.precio_unitario > 0)
+
+  if (!Array.isArray(productosRaw) || productosRaw.length === 0) {
     return NextResponse.json({ error: 'productos array must be non-empty' }, { status: 400 })
   }
+
+  if (productosFiltrados.length === 0) {
+    return NextResponse.json({
+      error: 'Todos los ítems tienen cantidad=0 o precio=0 — nada para registrar en Dux',
+    }, { status: 400 })
+  }
+
+  payload['productos'] = productosFiltrados
+
+  // Log payload (excluding token) for debugging
+  console.log('[dux/compras] Payload:', JSON.stringify({
+    ...payload,
+    productos_count: productosFiltrados.length,
+    productos_omitidos: productosRaw.length - productosFiltrados.length,
+    productos: productosFiltrados,
+  }))
 
   try {
     const duxRes = await fetch(`${DUX_BASE}/v2/compras`, {
@@ -79,9 +100,9 @@ export async function POST(req: NextRequest) {
     try { data = JSON.parse(text) } catch { data = { raw: text } }
 
     if (!duxRes.ok) {
-      console.error('[dux/compras] Error from Dux:', duxRes.status, text.slice(0, 500))
+      console.error('[dux/compras] Error from Dux:', duxRes.status, text.slice(0, 2000))
       return NextResponse.json(
-        { error: `Dux responded ${duxRes.status}`, dux_response: data },
+        { error: `Dux responded ${duxRes.status}`, dux_response: data, payload_sent: payload },
         { status: duxRes.status >= 500 ? 502 : duxRes.status }
       )
     }
