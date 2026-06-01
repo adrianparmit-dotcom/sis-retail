@@ -151,6 +151,11 @@ export interface Lote {
 }
 
 export interface InvoiceLineItem {
+  // DB primary key in recepcion_items (set once persisted as part of a borrador).
+  // Lets us do per-item upserts instead of delete+reinsert, which is what makes
+  // live multi-user collaboration possible.
+  recepcion_item_id    ?: string
+
   // From supplier invoice
   sku_proveedor         : string      // supplier code or barcode
   descripcion_proveedor : string      // supplier description

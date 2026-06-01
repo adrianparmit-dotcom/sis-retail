@@ -22,11 +22,12 @@ import { supabase } from '@/lib/supabase'
 import { parseFactura, calcPrecioVenta, detectProveedorType } from '@/lib/invoice-parsers'
 import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorToPDF, type DocumentoProveedor } from '@/lib/proveedor-doc'
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
+import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { CheckCircle2, HelpCircle, Download, Loader2, ChevronRight, Save } from 'lucide-react'
+import { CheckCircle2, HelpCircle, Download, Loader2, ChevronRight, Save, Users, Link2 } from 'lucide-react'
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -442,6 +443,68 @@ export default function RecepcionFacturaPage() {
   const [docCopied, setDocCopied]             = useState(false)
   const pdfInputRef                           = useRef<HTMLInputElement>(null)
 
+  // Live multi-user collab state
+  const [presenceCount, setPresenceCount]     = useState(1)
+  const [linkCopied, setLinkCopied]           = useState(false)
+  const itemsRef                              = useRef<InvoiceLineItem[]>([])
+  const saveTimersRef                         = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+
+  // Keep itemsRef fresh so debounced save callbacks always see the latest state
+  useEffect(() => { itemsRef.current = items }, [items])
+
+  // Realtime: subscribe to borrador changes from other users
+  useRecepcionRealtime(borradorId, productos, setItems, setPresenceCount)
+
+  // Cleanup pending autosave timers on unmount
+  useEffect(() => {
+    const timers = saveTimersRef.current
+    return () => { for (const t of timers.values()) clearTimeout(t) }
+  }, [])
+
+  /**
+   * Schedule a per-item autosave (debounced 600ms). Called from every state
+   * mutator. If the item has no recepcion_item_id yet, the save creates one
+   * and writes it back into local state so subsequent saves are upserts.
+   */
+  const scheduleSave = useCallback((idx: number) => {
+    const recId = borradorId
+    if (!recId) return
+    const timers = saveTimersRef.current
+    const existing = timers.get(idx)
+    if (existing) clearTimeout(existing)
+    const t = setTimeout(async () => {
+      timers.delete(idx)
+      const item = itemsRef.current[idx]
+      if (!item) return
+      const newId = await persistItem(recId, item)
+      if (newId && !item.recepcion_item_id) {
+        setItems(prev => prev.map((it, i) => i === idx ? { ...it, recepcion_item_id: newId } : it))
+      }
+    }, 600)
+    timers.set(idx, t)
+  }, [borradorId])
+
+  /** Flush every pending autosave immediately and wait for them. */
+  const flushPendingSaves = useCallback(async () => {
+    const recId = borradorId
+    if (!recId) return
+    const timers = saveTimersRef.current
+    const pending = Array.from(timers.keys())
+    for (const idx of pending) {
+      const t = timers.get(idx)
+      if (t) clearTimeout(t)
+      timers.delete(idx)
+    }
+    await Promise.all(pending.map(async (idx) => {
+      const item = itemsRef.current[idx]
+      if (!item) return
+      const newId = await persistItem(recId, item)
+      if (newId && !item.recepcion_item_id) {
+        setItems(prev => prev.map((it, i) => i === idx ? { ...it, recepcion_item_id: newId } : it))
+      }
+    }))
+  }, [borradorId])
+
   // ── Load products + SKU map ──────────────────────────────────
 
   useEffect(() => {
@@ -550,6 +613,7 @@ export default function RecepcionFacturaPage() {
         ? lotes.reduce((s, l) => s + l.cantidad, 0)
         : (it.cantidad_recibida ?? 0)
       return {
+        recepcion_item_id     : it.id,
         sku_proveedor         : it.sku_proveedor ?? it.sku,
         descripcion_proveedor : it.descripcion_proveedor ?? it.nombre_producto ?? it.sku,
         cantidad              : it.cantidad_esperada,
@@ -652,6 +716,45 @@ export default function RecepcionFacturaPage() {
 
   // ── Step 1 ────────────────────────────────────────────────────
 
+  /**
+   * Create the recepciones row + insert all items, returning items with their
+   * persisted recepcion_item_id. Called right after parse so a second user
+   * can immediately join via the borrador URL.
+   */
+  async function createBorradorFromParsed(
+    parsed     : ParsedFactura,
+    items      : InvoiceLineItem[],
+    textoOrig  : string,
+  ): Promise<{ recId: string | null; items: InvoiceLineItem[] }> {
+    const fechaISO = parsed.fecha
+      ? parsed.fecha.split('/').reverse().join('-')
+      : new Date().toISOString().split('T')[0]
+    const { data: recRow, error: recErr } = await supabase.from('recepciones').insert({
+      numero_comprobante : parsed.nro_comprobante || null,
+      dux_compra_id      : parsed.nro_comprobante || null,
+      proveedor_nombre   : parsed.proveedor_nombre || null,
+      fecha_factura      : fechaISO,
+      fecha_recepcion    : new Date().toISOString().split('T')[0],
+      estado             : 'borrador',
+      sucursal_id        : sucursalId,
+      texto_original     : textoOrig,
+      last_edited_by     : CLIENT_ID,
+    }).select('id').single()
+    if (recErr || !recRow) {
+      console.error('Error creando borrador:', recErr)
+      return { recId: null, items }
+    }
+    const recId = (recRow as { id: string }).id
+    // Persist all items in parallel so the borrador is fully shareable from t=0
+    const withIds = await Promise.all(items.map(async (it) => {
+      const id = await persistItem(recId, it)
+      return id ? { ...it, recepcion_item_id: id } : it
+    }))
+    // Update URL so the second user can land on the same borrador
+    try { window.history.replaceState({}, '', `?borrador=${recId}`) } catch {}
+    return { recId, items: withIds }
+  }
+
   async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -703,10 +806,14 @@ export default function RecepcionFacturaPage() {
         })),
       }
 
-      setTexto(JSON.stringify(data, null, 2))
+      const textoOriginal = JSON.stringify(data, null, 2)
+      setTexto(textoOriginal)
       const matched = parsed.items.map(item => matchItem(item, parsed.proveedor_nombre))
+      // Auto-create the borrador so multi-user collab works from t=0
+      const { recId, items: withIds } = await createBorradorFromParsed(parsed, matched, textoOriginal)
       setFactura(parsed)
-      setItems(matched)
+      setItems(withIds)
+      if (recId) setBorradorId(recId)
       setStep('review')
     } catch (err) {
       alert('Error al procesar el PDF: ' + (err as Error).message)
@@ -716,13 +823,15 @@ export default function RecepcionFacturaPage() {
     }
   }
 
-  function handleParsear() {
+  async function handleParsear() {
     if (!texto.trim()) return
     const tipo   = tipoProveedor === 'auto' ? detectProveedorType(texto) : tipoProveedor
     const parsed = parseFactura(texto, tipo)
     const matched = parsed.items.map(item => matchItem(item, parsed.proveedor_nombre))
+    const { recId, items: withIds } = await createBorradorFromParsed(parsed, matched, texto)
     setFactura(parsed)
-    setItems(matched)
+    setItems(withIds)
+    if (recId) setBorradorId(recId)
     setStep('review')
   }
 
@@ -749,6 +858,7 @@ export default function RecepcionFacturaPage() {
       next[idx] = merged
       return next
     })
+    scheduleSave(idx)
   }
 
   function manualMatch(idx: number, p: Producto) {
@@ -758,6 +868,7 @@ export default function RecepcionFacturaPage() {
       return next
     })
     setSearchTarget(null)
+    scheduleSave(idx)
   }
 
   function toggleGranel(idx: number) {
@@ -778,6 +889,7 @@ export default function RecepcionFacturaPage() {
       }
       return next
     })
+    scheduleSave(idx)
   }
 
   function updateDerivados(idx: number, derivados: GranelDerivado[]) {
@@ -786,6 +898,7 @@ export default function RecepcionFacturaPage() {
       next[idx] = { ...next[idx], derivados }
       return next
     })
+    scheduleSave(idx)
   }
 
   // Multi-lot helpers — first call to addLote "materializes" current single-lot values
@@ -809,6 +922,7 @@ export default function RecepcionFacturaPage() {
       }
       return next
     })
+    scheduleSave(idx)
   }
 
   function removeLote(idx: number, loteIdx: number) {
@@ -833,6 +947,7 @@ export default function RecepcionFacturaPage() {
       }
       return next
     })
+    scheduleSave(idx)
   }
 
   function updateLote(idx: number, loteIdx: number, patch: Partial<Lote>) {
@@ -847,90 +962,46 @@ export default function RecepcionFacturaPage() {
       }
       return next
     })
+    scheduleSave(idx)
   }
 
   // ── Save borrador ─────────────────────────────────────────────
+  // Now that every state mutation triggers a debounced per-item save, this is
+  // essentially a "force flush + confirm everything is on the DB" action.
+  // Keeps the explicit button for operator peace of mind.
 
   const saveBorrador = useCallback(async () => {
     if (!factura) return
     setSavingBorrador(true)
     try {
-      const fechaISO = factura.fecha
-        ? factura.fecha.split('/').reverse().join('-')
-        : new Date().toISOString().split('T')[0]
-
       let recId = borradorId
+      // If for some reason auto-create on parse didn't run (older borrador URL, race), make one now.
       if (!recId) {
-        const { data } = await supabase.from('recepciones').insert({
-          numero_comprobante : factura.nro_comprobante || null,
-          dux_compra_id      : factura.nro_comprobante || null,
-          proveedor_nombre   : factura.proveedor_nombre || null,
-          fecha_factura      : fechaISO,
-          fecha_recepcion    : new Date().toISOString().split('T')[0],
-          estado             : 'borrador',
-          sucursal_id        : sucursalId,
-          texto_original     : texto,
-        }).select('id').single()
-        recId = (data as { id: string } | null)?.id ?? null
-        if (recId) setBorradorId(recId)
+        const created = await createBorradorFromParsed(factura, items, texto)
+        recId = created.recId
+        if (recId) {
+          setBorradorId(recId)
+          setItems(created.items)
+        }
       } else {
-        await supabase.from('recepciones')
-          .update({ estado: 'borrador', sucursal_id: sucursalId, updated_at: new Date().toISOString() })
-          .eq('id', recId)
+        await supabase.from('recepciones').update({
+          estado         : 'borrador',
+          sucursal_id    : sucursalId,
+          last_edited_by : CLIENT_ID,
+          updated_at     : new Date().toISOString(),
+        }).eq('id', recId)
+        await flushPendingSaves()
       }
-
       if (!recId) throw new Error('No se pudo crear el borrador')
-
-      // Replace all items (cascade deletes lotes + fraccionamiento via FK)
-      await supabase.from('recepcion_items').delete().eq('recepcion_id', recId)
-      for (const item of items) {
-        const { data: itemRow } = await supabase.from('recepcion_items').insert({
-          recepcion_id          : recId,
-          producto_id           : item.es_granel ? null : (item.producto_id ?? null),
-          sku                   : item.producto_sku ?? item.sku_proveedor,
-          nombre_producto       : item.producto_nombre ?? item.descripcion_proveedor,
-          cantidad_esperada     : item.cantidad,
-          cantidad_recibida     : item.cantidad_recibida,
-          fecha_vencimiento     : item.fecha_vencimiento || null,
-          estado                : item.estado_recepcion,
-          es_granel             : item.es_granel,
-          iva_porcentaje        : item.iva_porcentaje,
-          costo_unitario        : item.costo_unitario,
-          sku_proveedor         : item.sku_proveedor,
-          descripcion_proveedor : item.descripcion_proveedor,
-          precio_venta_sugerido : item.precio_venta_sugerido,
-        }).select('id').single()
-        const itemId = (itemRow as { id: string } | null)?.id
-        if (itemId && item.es_granel && item.derivados && item.derivados.length > 0) {
-          await supabase.from('recepcion_item_fraccionamiento').insert(
-            item.derivados.map(d => ({
-              recepcion_item_id : itemId,
-              producto_final_id : d.producto_id,
-              cantidad_objetivo : d.cantidad_objetivo ?? null,
-            }))
-          )
-        }
-        if (itemId && item.lotes.length > 0) {
-          await supabase.from('recepcion_item_lotes').insert(
-            item.lotes
-              .filter(l => l.cantidad > 0)
-              .map(l => ({
-                recepcion_item_id : itemId,
-                cantidad          : l.cantidad,
-                fecha_vencimiento : l.fecha_vencimiento || null,
-                numero_lote       : l.numero_lote ?? null,
-              }))
-          )
-        }
-      }
-
       setBorradorSavedAt(new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }))
     } catch (err) {
       alert('Error al guardar borrador: ' + (err as Error).message)
     } finally {
       setSavingBorrador(false)
     }
-  }, [factura, items, sucursalId, texto, borradorId])
+    // createBorradorFromParsed is stable enough at runtime; eslint deps quieted intentionally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factura, items, sucursalId, texto, borradorId, flushPendingSaves])
 
   // ── Confirm ───────────────────────────────────────────────────
 
@@ -949,112 +1020,67 @@ export default function RecepcionFacturaPage() {
       const totalIva   = items.reduce((s, i) => s + i.costo_unitario * i.cantidad * ((i.iva_porcentaje ?? 0) / 100), 0)
       const totalFinal = totalNeto + totalIva
 
-      // ── 1. Upsert recepciones record with totals ────────────
-      let recId: string
-      if (borradorId) {
-        await supabase.from('recepciones')
-          .update({ estado: 'confirmada', sucursal_id: sucursalId,
-            fecha_recepcion: new Date().toISOString().split('T')[0],
-            total_neto    : totalNeto,
-            total_iva     : totalIva,
-            total_factura : totalFinal })
-          .eq('id', borradorId)
-        recId = borradorId
-        await supabase.from('recepcion_items').delete().eq('recepcion_id', recId)
-      } else {
-        const { data, error } = await supabase.from('recepciones').insert({
-          numero_comprobante : factura.nro_comprobante || null,
-          dux_compra_id      : factura.nro_comprobante || null,
-          proveedor_nombre   : factura.proveedor_nombre || null,
-          fecha_factura      : fechaISO,
-          fecha_recepcion    : new Date().toISOString().split('T')[0],
-          estado             : 'confirmada',
-          sucursal_id        : sucursalId,
-          texto_original     : texto,
-          total_neto         : totalNeto,
-          total_iva          : totalIva,
-          total_factura      : totalFinal,
-        }).select('id').single()
-        if (error || !data) throw new Error(error?.message ?? 'Error')
-        recId = (data as { id: string }).id
-      }
-
-      // ── 2. Save items + fraccionamiento + vencimientos ──────
-      for (const item of items) {
-        const { data: itemRow } = await supabase.from('recepcion_items').insert({
-          recepcion_id          : recId,
-          producto_id           : item.es_granel ? null : (item.producto_id ?? null),
-          sku                   : item.producto_sku ?? item.sku_proveedor,
-          nombre_producto       : item.producto_nombre ?? item.descripcion_proveedor,
-          cantidad_esperada     : item.cantidad,
-          cantidad_recibida     : item.cantidad_recibida,
-          fecha_vencimiento     : item.fecha_vencimiento || null,
-          estado                : item.estado_recepcion,
-          es_granel             : item.es_granel,
-          iva_porcentaje        : item.iva_porcentaje,
-          costo_unitario        : item.costo_unitario,
-          sku_proveedor         : item.sku_proveedor,
-          descripcion_proveedor : item.descripcion_proveedor,
-          precio_venta_sugerido : item.precio_venta_sugerido,
-        }).select('id').single()
-        const itemId = (itemRow as { id: string } | null)?.id
-
-        // Granel: persist derivatives in fraccionamiento — vencimientos are created later
-        if (itemId && item.es_granel && item.derivados && item.derivados.length > 0) {
-          await supabase.from('recepcion_item_fraccionamiento').insert(
-            item.derivados.map(d => ({
-              recepcion_item_id : itemId,
-              producto_final_id : d.producto_id,
-              cantidad_objetivo : d.cantidad_objetivo ?? null,
-            }))
-          )
+      // ── 1. Ensure borrador exists + flush pending edits ───────
+      let recId = borradorId
+      if (!recId) {
+        const created = await createBorradorFromParsed(factura, items, texto)
+        recId = created.recId
+        if (recId) {
+          setBorradorId(recId)
+          setItems(created.items)
         }
+      }
+      if (!recId) throw new Error('No se pudo crear / encontrar el borrador')
+      await flushPendingSaves()
 
-        // Multi-lot: persist lots + create one vencimiento row per lot
-        if (itemId && !item.es_granel && item.lotes.length > 0) {
+      // Mark recepción as confirmada + totals
+      await supabase.from('recepciones').update({
+        estado          : 'confirmada',
+        sucursal_id     : sucursalId,
+        fecha_recepcion : new Date().toISOString().split('T')[0],
+        total_neto      : totalNeto,
+        total_iva       : totalIva,
+        total_factura   : totalFinal,
+        last_edited_by  : CLIENT_ID,
+        updated_at      : new Date().toISOString(),
+      }).eq('id', recId)
+
+      // ── 2. Crear vencimientos (los items y sus lotes ya estan en DB) ──
+      for (const item of items) {
+        if (item.es_granel) continue
+        // Multi-lot path
+        if (item.lotes.length > 0) {
           const validLotes = item.lotes.filter(l => l.cantidad > 0)
-          if (validLotes.length > 0) {
-            await supabase.from('recepcion_item_lotes').insert(
-              validLotes.map(l => ({
-                recepcion_item_id : itemId,
-                cantidad          : l.cantidad,
-                fecha_vencimiento : l.fecha_vencimiento || null,
-                numero_lote       : l.numero_lote ?? null,
-              }))
-            )
-            if (item.producto_id && item.estado_recepcion !== 'vencido_llegada') {
-              for (const l of validLotes) {
-                if (!l.fecha_vencimiento) continue
-                const { data: existing } = await supabase.from('vencimientos')
-                  .select('id,cantidad')
-                  .eq('producto_id', item.producto_id)
-                  .eq('sucursal_id', sucursalId)
-                  .eq('fecha_vencimiento', l.fecha_vencimiento)
-                  .single()
-                if (existing) {
-                  await supabase.from('vencimientos')
-                    .update({ cantidad: (existing as { id: string; cantidad: number }).cantidad + l.cantidad,
-                      updated_at: new Date().toISOString() })
-                    .eq('id', (existing as { id: string }).id)
-                } else {
-                  await supabase.from('vencimientos').insert({
-                    producto_id      : item.producto_id,
-                    sucursal_id      : sucursalId,
-                    fecha_vencimiento: l.fecha_vencimiento,
-                    cantidad         : l.cantidad,
-                    origen           : 'recepcion_factura',
-                    recepcion_id     : recId,
-                  })
-                }
+          if (item.producto_id && item.estado_recepcion !== 'vencido_llegada') {
+            for (const l of validLotes) {
+              if (!l.fecha_vencimiento) continue
+              const { data: existing } = await supabase.from('vencimientos')
+                .select('id,cantidad')
+                .eq('producto_id', item.producto_id)
+                .eq('sucursal_id', sucursalId)
+                .eq('fecha_vencimiento', l.fecha_vencimiento)
+                .maybeSingle()
+              if (existing) {
+                await supabase.from('vencimientos')
+                  .update({ cantidad: (existing as { id: string; cantidad: number }).cantidad + l.cantidad,
+                    updated_at: new Date().toISOString() })
+                  .eq('id', (existing as { id: string }).id)
+              } else {
+                await supabase.from('vencimientos').insert({
+                  producto_id      : item.producto_id,
+                  sucursal_id      : sucursalId,
+                  fecha_vencimiento: l.fecha_vencimiento,
+                  cantidad         : l.cantidad,
+                  origen           : 'recepcion_factura',
+                  recepcion_id     : recId,
+                })
               }
             }
           }
+          continue
         }
-
-        // Single-lot legacy path: one vencimiento with item-level date/qty
+        // Single-lot legacy path
         if (
-          !item.es_granel &&
-          item.lotes.length === 0 &&
           item.producto_id &&
           item.fecha_vencimiento &&
           item.cantidad_recibida > 0 &&
@@ -1065,7 +1091,7 @@ export default function RecepcionFacturaPage() {
             .eq('producto_id', item.producto_id)
             .eq('sucursal_id', sucursalId)
             .eq('fecha_vencimiento', item.fecha_vencimiento)
-            .single()
+            .maybeSingle()
 
           if (existing) {
             await supabase.from('vencimientos')
@@ -1209,7 +1235,9 @@ export default function RecepcionFacturaPage() {
     } finally {
       setSaving(false)
     }
-  }, [factura, items, sucursalId, texto, borradorId, margenProveedor])
+    // createBorradorFromParsed is intentionally not declared as a dep (stable at runtime)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factura, items, sucursalId, texto, borradorId, margenProveedor, flushPendingSaves])
 
   // ── Stats ─────────────────────────────────────────────────────
 
@@ -1353,8 +1381,33 @@ export default function RecepcionFacturaPage() {
             <button onClick={() => setStep('paste')} className="text-zinc-400 hover:text-zinc-700 text-sm">← Volver</button>
             <h1 className="text-xl font-semibold text-zinc-900">Revisar factura</h1>
             {borradorId && <Badge className="bg-yellow-100 text-yellow-700 border-yellow-200">Borrador</Badge>}
+            {presenceCount > 1 && (
+              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 flex items-center gap-1">
+                <Users size={11} />{presenceCount} editando
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
+            {borradorId && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  const url = `${window.location.origin}/recepciones/factura?borrador=${borradorId}`
+                  try {
+                    await navigator.clipboard.writeText(url)
+                    setLinkCopied(true)
+                    setTimeout(() => setLinkCopied(false), 2000)
+                  } catch {
+                    window.prompt('Copiá este link:', url)
+                  }
+                }}
+              >
+                {linkCopied
+                  ? <>✓ Copiado</>
+                  : <><Link2 size={13} className="mr-1" />Compartir</>}
+              </Button>
+            )}
             {borradorSavedAt && <span className="text-xs text-green-600">Guardado {borradorSavedAt}</span>}
             <Button variant="outline" size="sm" onClick={saveBorrador} disabled={savingBorrador}>
               {savingBorrador
