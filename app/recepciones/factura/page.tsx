@@ -599,6 +599,8 @@ export default function RecepcionFacturaPage() {
   const [saving, setSaving]                   = useState(false)
   const [doneReport, setDoneReport]           = useState('')
   const [duxError, setDuxError]               = useState<string | null>(null)
+  const [duxPayloadRetry, setDuxPayloadRetry] = useState<Record<string, unknown> | null>(null)
+  const [retryingDux, setRetryingDux]         = useState(false)
   const [priceExcelUrl, setPriceExcelUrl]     = useState<string | null>(null)
   const [priceExcelCount, setPriceExcelCount] = useState(0)
   const [transferenciaId, setTransferenciaId] = useState<string | null>(null)
@@ -1193,6 +1195,37 @@ export default function RecepcionFacturaPage() {
 
   // ── Confirm ───────────────────────────────────────────────────
 
+  // ── Dux compras helper ──────────────────────────────────────
+  async function postDuxCompra(payload: Record<string, unknown>): Promise<{ msg: string } | null> {
+    const res = await fetch('/api/dux/compras', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify(payload),
+    })
+    if (res.ok) return null
+    const e = await res.json().catch(() => ({})) as Record<string, unknown>
+    const duxResp = e.dux_response as Record<string, unknown> | null | undefined
+    const msg = (duxResp?.error as Record<string, unknown>)?.mensaje as string
+             ?? (duxResp?.mensaje as string)
+             ?? (e.error as string)
+             ?? 'error desconocido'
+    const hint = res.status === 502 ? ' — puede ser comprobante duplicado si ya estaba en Dux' : ''
+    return { msg: `Dux ${res.status}: ${msg}${hint}` }
+  }
+
+  async function retryDux() {
+    if (!duxPayloadRetry) return
+    setRetryingDux(true)
+    setDuxError(null)
+    const err = await postDuxCompra(duxPayloadRetry)
+    if (err) {
+      setDuxError(err.msg)
+    } else {
+      setDuxPayloadRetry(null)
+    }
+    setRetryingDux(false)
+  }
+
   const confirmar = useCallback(async () => {
     if (!factura) return
     setSaving(true)
@@ -1377,23 +1410,10 @@ export default function RecepcionFacturaPage() {
           })),
         }
 
-        const res = await fetch('/api/dux/compras', {
-          method : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body   : JSON.stringify(duxPayload),
-        })
-        if (!res.ok) {
-          const e = await res.json().catch(() => ({})) as Record<string, unknown>
-          // Extract the most useful error detail from Dux's response
-          const duxResp = e.dux_response as Record<string, unknown> | null | undefined
-          const duxMsg  = (duxResp?.error as Record<string, unknown>)?.mensaje
-                       ?? (duxResp?.mensaje as string)
-                       ?? (e.error as string)
-                       ?? 'error desconocido'
-          const hint = res.status === 502
-            ? ' (puede ser comprobante duplicado si ya estaba cargado en Dux)'
-            : ''
-          setDuxError(`Dux respondió ${res.status}: ${duxMsg}${hint}. La recepción quedó guardada en SOHO — cargala manualmente en Dux si todavía no está.`)
+        const duxRes = await postDuxCompra(duxPayload)
+        if (duxRes) {
+          setDuxError(duxRes.msg)
+          setDuxPayloadRetry(duxPayload)
         }
       }
 
@@ -1986,9 +2006,25 @@ export default function RecepcionFacturaPage() {
         </div>
 
         {duxError && (
-          <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
-            <p className="font-semibold mb-1">⚠️ Aviso sobre Dux</p>
-            <p>{duxError}</p>
+          <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800 space-y-2">
+            <p className="font-semibold">⚠️ No se pudo registrar la compra en Dux</p>
+            <p className="text-xs">{duxError}</p>
+            {duxPayloadRetry && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-orange-300 text-orange-800 hover:bg-orange-100"
+                disabled={retryingDux}
+                onClick={retryDux}
+              >
+                {retryingDux
+                  ? <><Loader2 size={12} className="animate-spin mr-1" />Reintentando...</>
+                  : '🔄 Reintentar envío a Dux'}
+              </Button>
+            )}
+            {!duxPayloadRetry && (
+              <p className="text-xs text-orange-600">✓ Enviado correctamente a Dux al reintentar.</p>
+            )}
           </div>
         )}
 
