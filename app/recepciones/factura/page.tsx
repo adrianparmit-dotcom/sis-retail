@@ -159,12 +159,60 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
 }) {
   const [q, setQ] = useState(initialQuery ?? '')
   const [highlightIdx, setHighlightIdx] = useState(0)
-  const [fetchingDux, setFetchingDux]   = useState(false)
-  const [duxFetchError, setDuxFetchError] = useState<string | null>(null)
-  const [duxProgress, setDuxProgress]     = useState<{ page: number; total: number } | null>(null)
+  const [fetchingDux, setFetchingDux]       = useState(false)
+  const [duxFetchError, setDuxFetchError]   = useState<string | null>(null)
+  const [duxProgress, setDuxProgress]       = useState<{ page: number; total: number } | null>(null)
+  const [dbResults, setDbResults]           = useState<Producto[]>([])
+  const [loadingDb, setLoadingDb]           = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef  = useRef<HTMLDivElement>(null)
+  const dbTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => { inputRef.current?.focus(); inputRef.current?.select() }, [])
+
+  // Auto-search Supabase when local results are empty (debounced 500ms).
+  // Catches: (a) products inserted after page load, (b) name mismatches between
+  // the supplier description and the SOHO product name.
+  useEffect(() => {
+    if (dbTimerRef.current) clearTimeout(dbTimerRef.current)
+    setDbResults([])
+    const query = q.trim()
+    if (query.length < 2) return
+    dbTimerRef.current = setTimeout(async () => {
+      setLoadingDb(true)
+      try {
+        // Build OR filter: match sku exactly, barcode exactly, or name contains all tokens
+        const tokens = query.toLowerCase().replace(/[^a-z0-9áéíóúñ\s]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
+        let req = supabase.from('productos')
+          .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria')
+          .limit(20)
+        if (tokens.length === 0) return
+        // If it looks like a pure code (no spaces, <= 12 chars) try exact first
+        if (!query.includes(' ') && query.length <= 12) {
+          req = req.or(`sku.eq.${query},codigo_barras.eq.${query}`)
+        } else {
+          // name ilike with all tokens chained as AND
+          req = tokens.reduce(
+            (r, t) => r.ilike('nombre', `%${t}%`),
+            req
+          )
+        }
+        const { data } = await req
+        if (data && data.length > 0) {
+          // Exclude items already in the in-memory list to avoid dups
+          const inMemoryIds = new Set(productos.map(p => p.id))
+          const fresh = (data as Producto[]).filter(p => !inMemoryIds.has(p.id))
+          setDbResults(fresh.length > 0 ? fresh : (data as Producto[]))
+        }
+      } finally {
+        setLoadingDb(false)
+      }
+    }, 500)
+    return () => { if (dbTimerRef.current) clearTimeout(dbTimerRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // ranked is declared below via useMemo — use a separate effect that watches q only
+  // and checks ranked.length inline after it's computed; this avoids the forward-ref error.
+  // The guard `ranked.length > 0` is applied in the render (dbResults shown only when ranked empty).
+  }, [q]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchFromDux() {
     const query = q.trim()
@@ -321,19 +369,46 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
             </button>
           ))}
           {q.trim().length >= 2 && ranked.length === 0 && (
-            <div className="py-4 text-center space-y-2">
-              <p className="text-xs text-zinc-400">Sin resultados locales para &ldquo;{q}&rdquo;</p>
-              <Button size="sm" variant="outline" onClick={fetchFromDux} disabled={fetchingDux}>
-                {fetchingDux
-                  ? <><Loader2 size={12} className="animate-spin mr-1" />Buscando en Dux...</>
-                  : <>🔄 Buscar en Dux</>}
-              </Button>
-              {duxFetchError && (
-                <p className="text-xs text-red-600">{duxFetchError}</p>
+            <div className="py-2 space-y-1">
+              {/* DB fallback results (products not in memory or with different name) */}
+              {loadingDb && (
+                <p className="text-xs text-zinc-400 py-2 text-center flex items-center justify-center gap-1">
+                  <Loader2 size={11} className="animate-spin" />Buscando en sistema...
+                </p>
               )}
-              <p className="text-[10px] text-zinc-400">
-                Si lo acabás de crear en Dux, tocá &ldquo;Buscar en Dux&rdquo; para traerlo directo
-              </p>
+              {!loadingDb && dbResults.length > 0 && (
+                <>
+                  <p className="text-[10px] text-zinc-400 px-2 pt-1">Encontrado en sistema:</p>
+                  {dbResults.map((p, idx) => (
+                    <button
+                      key={p.id}
+                      onClick={() => { onProductoFetched?.(p); onSelect(p); onClose() }}
+                      onMouseEnter={() => setHighlightIdx(-1)}
+                      className="w-full text-left px-3 py-2 rounded text-sm hover:bg-blue-50 border border-transparent hover:border-blue-200"
+                    >
+                      <div className="font-medium text-zinc-800 leading-tight">{p.nombre ?? p.sku}</div>
+                      <div className="text-[11px] text-zinc-400 mt-0.5">
+                        <span className="font-mono">{p.sku}</span>
+                        {p.categoria && <span className="ml-2">{p.categoria}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </>
+              )}
+              {!loadingDb && dbResults.length === 0 && (
+                <div className="py-3 text-center space-y-2">
+                  <p className="text-xs text-zinc-400">No encontrado en sistema para &ldquo;{q}&rdquo;</p>
+                  <Button size="sm" variant="outline" onClick={fetchFromDux} disabled={fetchingDux}>
+                    {fetchingDux
+                      ? <><Loader2 size={12} className="animate-spin mr-1" />
+                          {duxProgress ? `Buscando pág. ${duxProgress.page}/${duxProgress.total}...` : 'Conectando a Dux...'}
+                        </>
+                      : <>🔄 Buscar en Dux (puede tardar 2-4 min)</>}
+                  </Button>
+                  {duxFetchError && <p className="text-xs text-red-600">{duxFetchError}</p>}
+                  <p className="text-[10px] text-zinc-400">Solo si lo creaste en Dux hace menos de 1 hora</p>
+                </div>
+              )}
             </div>
           )}
           {q.trim().length < 2 && (
