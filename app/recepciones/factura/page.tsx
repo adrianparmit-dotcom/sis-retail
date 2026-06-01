@@ -149,18 +149,44 @@ function DateSelector({ value, onChange }: { value: string; onChange: (v: string
 
 // ── Product search popup ─────────────────────────────────────────
 
-function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onClose }: {
-  productos       : Producto[]
-  initialQuery   ?: string
-  supplierContext?: string
-  onSelect        : (p: Producto) => void
-  onClose         : () => void
+function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onClose, onProductoFetched }: {
+  productos         : Producto[]
+  initialQuery     ?: string
+  supplierContext  ?: string
+  onSelect          : (p: Producto) => void
+  onClose           : () => void
+  onProductoFetched?: (p: Producto) => void
 }) {
   const [q, setQ] = useState(initialQuery ?? '')
   const [highlightIdx, setHighlightIdx] = useState(0)
+  const [fetchingDux, setFetchingDux]   = useState(false)
+  const [duxFetchError, setDuxFetchError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef  = useRef<HTMLDivElement>(null)
   useEffect(() => { inputRef.current?.focus(); inputRef.current?.select() }, [])
+
+  async function fetchFromDux() {
+    const query = q.trim()
+    if (!query) return
+    setFetchingDux(true)
+    setDuxFetchError(null)
+    try {
+      const res = await fetch(`/api/dux/fetch-producto?q=${encodeURIComponent(query)}`)
+      const data = await res.json()
+      if (!res.ok) {
+        setDuxFetchError(data.error ?? `Error ${res.status}`)
+        return
+      }
+      const producto = data.producto as Producto
+      onProductoFetched?.(producto)
+      onSelect(producto)
+      onClose()
+    } catch (e) {
+      setDuxFetchError((e as Error).message)
+    } finally {
+      setFetchingDux(false)
+    }
+  }
 
   // Match by SKU, barcode or name. Pure SKU/barcode matches rank highest.
   const ranked = useMemo(() => {
@@ -246,7 +272,20 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
             </button>
           ))}
           {q.trim().length >= 2 && ranked.length === 0 && (
-            <p className="text-xs text-zinc-400 py-4 text-center">Sin resultados para &ldquo;{q}&rdquo;</p>
+            <div className="py-4 text-center space-y-2">
+              <p className="text-xs text-zinc-400">Sin resultados locales para &ldquo;{q}&rdquo;</p>
+              <Button size="sm" variant="outline" onClick={fetchFromDux} disabled={fetchingDux}>
+                {fetchingDux
+                  ? <><Loader2 size={12} className="animate-spin mr-1" />Buscando en Dux...</>
+                  : <>🔄 Buscar en Dux</>}
+              </Button>
+              {duxFetchError && (
+                <p className="text-xs text-red-600">{duxFetchError}</p>
+              )}
+              <p className="text-[10px] text-zinc-400">
+                Si lo acabás de crear en Dux, tocá &ldquo;Buscar en Dux&rdquo; para traerlo directo
+              </p>
+            </div>
           )}
           {q.trim().length < 2 && (
             <p className="text-xs text-zinc-400 py-4 text-center">Escribí al menos 2 letras para buscar</p>
@@ -1362,6 +1401,11 @@ export default function RecepcionFacturaPage() {
             initialQuery=""
             onSelect={p => manualMatch(searchTarget, p)}
             onClose={() => setSearchTarget(null)}
+            onProductoFetched={p => setProductos(prev =>
+              prev.some(x => x.id === p.id)
+                ? prev.map(x => x.id === p.id ? p : x)
+                : [...prev, p]
+            )}
           />
         )}
 
