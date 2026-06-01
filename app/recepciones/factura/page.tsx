@@ -199,10 +199,19 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
     if (e.key === 'Escape') { onClose(); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, ranked.length - 1)) }
     if (e.key === 'ArrowUp')   { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)) }
-    if (e.key === 'Enter' && ranked[highlightIdx]) {
+    if (e.key === 'Enter') {
       e.preventDefault()
-      onSelect(ranked[highlightIdx])
-      onClose()
+      // Scanner-friendly path: read the live input value (in case React state hasn't
+      // caught up with fast-typing scanner) and try exact SKU / barcode match first.
+      const current = (inputRef.current?.value ?? q).trim().toLowerCase()
+      if (current) {
+        const exact = productos.find(p =>
+          (p.sku ?? '').toLowerCase() === current ||
+          (p.codigo_barras ?? '').toLowerCase() === current
+        )
+        if (exact) { onSelect(exact); onClose(); return }
+      }
+      if (ranked[highlightIdx]) { onSelect(ranked[highlightIdx]); onClose() }
     }
   }
 
@@ -217,7 +226,7 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
         <Input ref={inputRef} value={q}
           onChange={e => { setQ(e.target.value); setHighlightIdx(0) }}
           onKeyDown={handleKey}
-          placeholder="SKU, código de barras o nombre del producto..." />
+          placeholder="Escaneá código de barras o escribí SKU / nombre..." />
         <div ref={listRef} className="mt-2 max-h-80 overflow-y-auto space-y-0.5">
           {ranked.map((p, idx) => (
             <button
@@ -243,7 +252,7 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
           )}
         </div>
         <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-400">
-          <span>↑↓ navegar · Enter elegir · Esc cerrar</span>
+          <span>📷 Escaneá · ↑↓ navegar · Enter elegir · Esc cerrar</span>
           <button onClick={onClose} className="underline">Cerrar</button>
         </div>
       </div>
