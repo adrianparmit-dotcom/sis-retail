@@ -770,11 +770,27 @@ export default function RecepcionFacturaPage() {
       }
     }
 
+    // Fetch full product data for all matched items so producto_nombre / producto_sku
+    // display correctly on reload (the local `productos` state may not be loaded yet
+    // when loadBorrador runs, so we query directly instead of relying on it).
+    const matchedProductIds = [...new Set(dbItems.filter(it => it.producto_id).map(it => it.producto_id!))]
+    const prodByIdForBorrador = new Map<string, Producto>()
+    if (matchedProductIds.length > 0) {
+      const { data: prodRows } = await supabase
+        .from('productos')
+        .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria')
+        .in('id', matchedProductIds)
+      for (const p of (prodRows ?? []) as Producto[]) {
+        prodByIdForBorrador.set(p.id, p)
+      }
+    }
+
     const reconstructed: InvoiceLineItem[] = dbItems.map(it => {
       const lotes = lotesByItemId.get(it.id) ?? []
       const cantidadRecibida = lotes.length > 0
         ? lotes.reduce((s, l) => s + l.cantidad, 0)
         : (it.cantidad_recibida ?? 0)
+      const prod = it.producto_id ? prodByIdForBorrador.get(it.producto_id) : undefined
       return {
         recepcion_item_id     : it.id,
         sku_proveedor         : it.sku_proveedor ?? it.sku,
@@ -785,6 +801,11 @@ export default function RecepcionFacturaPage() {
         precio_venta_sugerido : it.precio_venta_sugerido ?? 0,
         match_confidence      : it.producto_id ? 'sku_map' : 'sin_match',
         producto_id           : it.producto_id ?? undefined,
+        // These three are what make the UI show the product name + "Cambiar" instead of "+ Asignar"
+        producto_sku          : prod?.sku,
+        producto_nombre       : prod?.nombre ?? undefined,
+        producto_precio_actual: prod?.precio_venta ?? undefined,
+        producto_id_dux       : prod?.proveedor_id_dux ?? undefined,
         cantidad_recibida     : cantidadRecibida,
         fecha_vencimiento     : it.fecha_vencimiento ?? '',
         estado_recepcion      : (it.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
