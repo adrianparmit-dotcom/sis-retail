@@ -1383,8 +1383,17 @@ export default function RecepcionFacturaPage() {
           body   : JSON.stringify(duxPayload),
         })
         if (!res.ok) {
-          const e = await res.json().catch(() => ({}))
-          setDuxError(`Dux respondió ${res.status}: ${(e as Record<string,unknown>).error ?? 'error desconocido'}. La recepción se guardó en SOHO — cargala manualmente en Dux si es necesario.`)
+          const e = await res.json().catch(() => ({})) as Record<string, unknown>
+          // Extract the most useful error detail from Dux's response
+          const duxResp = e.dux_response as Record<string, unknown> | null | undefined
+          const duxMsg  = (duxResp?.error as Record<string, unknown>)?.mensaje
+                       ?? (duxResp?.mensaje as string)
+                       ?? (e.error as string)
+                       ?? 'error desconocido'
+          const hint = res.status === 502
+            ? ' (puede ser comprobante duplicado si ya estaba cargado en Dux)'
+            : ''
+          setDuxError(`Dux respondió ${res.status}: ${duxMsg}${hint}. La recepción quedó guardada en SOHO — cargala manualmente en Dux si todavía no está.`)
         }
       }
 
