@@ -161,6 +161,7 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
   const [highlightIdx, setHighlightIdx] = useState(0)
   const [fetchingDux, setFetchingDux]   = useState(false)
   const [duxFetchError, setDuxFetchError] = useState<string | null>(null)
+  const [duxProgress, setDuxProgress]     = useState<{ page: number; total: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef  = useRef<HTMLDivElement>(null)
   useEffect(() => { inputRef.current?.focus(); inputRef.current?.select() }, [])
@@ -170,21 +171,69 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
     if (!query) return
     setFetchingDux(true)
     setDuxFetchError(null)
+    setDuxProgress(null)
     try {
       const res = await fetch(`/api/dux/fetch-producto?q=${encodeURIComponent(query)}`)
-      const data = await res.json()
-      if (!res.ok) {
-        setDuxFetchError(data.error ?? `Error ${res.status}`)
+      if (!res.ok || !res.body) {
+        let errMsg = `Error ${res.status}`
+        try { errMsg = (await res.json()).error ?? errMsg } catch {}
+        setDuxFetchError(errMsg)
         return
       }
-      const producto = data.producto as Producto
-      onProductoFetched?.(producto)
-      onSelect(producto)
-      onClose()
+      // Stream NDJSON: each line is a {type: ...} event
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let foundProducto: Producto | null = null
+      let finalError: string | null = null
+      let notFound = false
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const evt = JSON.parse(line) as {
+              type: string
+              total_items?: number
+              total_pages?: number
+              page?: number
+              producto?: Producto
+              error?: string
+            }
+            if (evt.type === 'start' && evt.total_pages) {
+              setDuxProgress({ page: 0, total: evt.total_pages })
+            } else if (evt.type === 'progress' && evt.page && evt.total_pages) {
+              setDuxProgress({ page: evt.page, total: evt.total_pages })
+            } else if (evt.type === 'found' && evt.producto) {
+              foundProducto = evt.producto
+            } else if (evt.type === 'notFound') {
+              notFound = true
+            } else if (evt.type === 'error' && evt.error) {
+              finalError = evt.error
+            }
+          } catch {}
+        }
+      }
+      if (foundProducto) {
+        onProductoFetched?.(foundProducto)
+        onSelect(foundProducto)
+        onClose()
+      } else if (notFound) {
+        setDuxFetchError(`No encontrado en Dux. Verificá que el SKU "${query}" exista y esté habilitado.`)
+      } else if (finalError) {
+        setDuxFetchError(finalError)
+      } else {
+        setDuxFetchError('Sin respuesta de Dux. Reintentá.')
+      }
     } catch (e) {
       setDuxFetchError((e as Error).message)
     } finally {
       setFetchingDux(false)
+      setDuxProgress(null)
     }
   }
 
@@ -1524,10 +1573,10 @@ export default function RecepcionFacturaPage() {
                       <td className="px-3 py-2 text-xs text-zinc-400">{i + 1}</td>
 
                       {/* Supplier description */}
-                      <td className="px-3 py-2 max-w-[160px]">
+                      <td className="px-3 py-2 max-w-[280px] min-w-[200px]">
                         <div className="text-xs font-mono text-zinc-400 truncate">{item.sku_proveedor}</div>
                         <div className="flex items-start gap-1">
-                          <div className="text-xs text-zinc-700 truncate flex-1" title={item.descripcion_proveedor}>
+                          <div className="text-xs text-zinc-700 leading-tight flex-1 line-clamp-3">
                             {item.descripcion_proveedor}
                           </div>
                           {item.descripcion_anterior && (
