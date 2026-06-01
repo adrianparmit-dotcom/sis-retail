@@ -44,6 +44,7 @@ export interface RecepcionItemRow {
   sku_proveedor        : string | null
   descripcion_proveedor: string | null
   precio_venta_sugerido: number | null
+  unidades_por_blister : number | null
   last_edited_by       : string | null
 }
 
@@ -90,6 +91,7 @@ function itemToRow(item: InvoiceLineItem, recepcionId: string): Omit<RecepcionIt
     sku_proveedor         : item.sku_proveedor,
     descripcion_proveedor : item.descripcion_proveedor,
     precio_venta_sugerido : item.precio_venta_sugerido,
+    unidades_por_blister  : item.unidades_por_blister,
     last_edited_by        : CLIENT_ID,
     updated_at            : new Date().toISOString(),
   }
@@ -115,6 +117,7 @@ export function rowToItem(
     costo_unitario        : row.costo_unitario ?? 0,
     iva_porcentaje        : row.iva_porcentaje ?? 21,
     precio_venta_sugerido : row.precio_venta_sugerido ?? 0,
+    unidades_por_blister  : row.unidades_por_blister ?? 1,
     match_confidence      : row.producto_id ? 'sku_map' : 'sin_match',
     producto_id           : row.producto_id ?? undefined,
     producto_sku          : prod?.sku,
@@ -125,7 +128,6 @@ export function rowToItem(
     fecha_vencimiento     : row.fecha_vencimiento ?? '',
     estado_recepcion      : (row.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
     es_blister            : /^BLISTER\s/i.test(row.nombre_producto ?? ''),
-    unidades_por_blister  : 1,
     es_granel             : !!row.es_granel,
     derivados             : row.es_granel ? derivs : undefined,
     lotes,

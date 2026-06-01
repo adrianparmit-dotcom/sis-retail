@@ -715,6 +715,7 @@ export default function RecepcionFacturaPage() {
       sku_proveedor: string | null
       descripcion_proveedor: string | null
       precio_venta_sugerido: number | null
+      unidades_por_blister: number | null
     }>
 
     // Fetch derivados for any granel items, then resolve product info from local state
@@ -810,7 +811,7 @@ export default function RecepcionFacturaPage() {
         fecha_vencimiento     : it.fecha_vencimiento ?? '',
         estado_recepcion      : (it.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
         es_blister            : /^BLISTER\s/i.test(it.nombre_producto ?? ''),
-        unidades_por_blister  : 1,
+        unidades_por_blister  : it.unidades_por_blister ?? 1,
         es_granel             : !!it.es_granel,
         derivados             : it.es_granel ? (derivadosByItemId.get(it.id) ?? []) : undefined,
         lotes,
