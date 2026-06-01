@@ -190,6 +190,9 @@ export interface InvoiceLineItem {
   es_blister          : boolean
   unidades_por_blister: number        // how many individual units per blister box
 
+  // Transferencia interna S2 → S1 (opcional, 0 = sin transferencia)
+  transferir_cantidad?: number
+
   // Granel (bulk by weight) — 1 supplier item → N final SKUs.
   // When es_granel = true, use `derivados` instead of producto_id.
   // Reception saved as draft; quantities updated as fractionation happens.

@@ -601,6 +601,7 @@ export default function RecepcionFacturaPage() {
   const [duxError, setDuxError]               = useState<string | null>(null)
   const [priceExcelUrl, setPriceExcelUrl]     = useState<string | null>(null)
   const [priceExcelCount, setPriceExcelCount] = useState(0)
+  const [transferenciaId, setTransferenciaId] = useState<string | null>(null)
   const [loadingPdf, setLoadingPdf]           = useState(false)
   const [docProveedor, setDocProveedor]       = useState<DocumentoProveedor | null>(null)
   const [docCopied, setDocCopied]             = useState(false)
@@ -716,6 +717,7 @@ export default function RecepcionFacturaPage() {
       descripcion_proveedor: string | null
       precio_venta_sugerido: number | null
       unidades_por_blister: number | null
+      transferir_cantidad: number | null
     }>
 
     // Fetch derivados for any granel items, then resolve product info from local state
@@ -812,6 +814,7 @@ export default function RecepcionFacturaPage() {
         estado_recepcion      : (it.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
         es_blister            : /^BLISTER\s/i.test(it.nombre_producto ?? ''),
         unidades_por_blister  : it.unidades_por_blister ?? 1,
+        transferir_cantidad   : it.transferir_cantidad ?? 0,
         es_granel             : !!it.es_granel,
         derivados             : it.es_granel ? (derivadosByItemId.get(it.id) ?? []) : undefined,
         lotes,
@@ -1296,7 +1299,34 @@ export default function RecepcionFacturaPage() {
         }
       }
 
-      // ── 3. Save new SKU mappings ─────────────────────────────
+      // ── 3. Crear transferencia interna si hay ítems para S1 ──
+      const itemsATransferir = items.filter(
+        i => i.producto_id && !i.es_granel && (i.transferir_cantidad ?? 0) > 0
+      )
+      if (itemsATransferir.length > 0) {
+        const { data: transf } = await supabase.from('transferencias_recepcion').insert({
+          recepcion_id        : recId,
+          sucursal_origen_id  : sucursalId,
+          sucursal_destino_id : 'a0000000-0000-0000-0000-000000000002', // SOHO 1 - La Pieza
+          estado              : 'pendiente',
+        }).select('id').single()
+        const transfId = (transf as { id: string } | null)?.id ?? null
+        if (transfId) {
+          await supabase.from('transferencias_recepcion_items').insert(
+            itemsATransferir.map(i => ({
+              transferencia_id  : transfId,
+              recepcion_item_id : i.recepcion_item_id ?? null,
+              producto_id       : i.producto_id!,
+              producto_sku      : i.producto_sku ?? i.sku_proveedor,
+              producto_nombre   : i.producto_nombre ?? i.descripcion_proveedor,
+              cantidad          : i.transferir_cantidad,
+            }))
+          )
+          setTransferenciaId(transfId)
+        }
+      }
+
+      // ── 4. Save new SKU mappings ─────────────────────────────
       const newMappings = items.filter(i =>
         i.sku_proveedor && i.producto_id &&
         (i.match_confidence === 'manual' || i.match_confidence === 'nombre')
@@ -1648,6 +1678,9 @@ export default function RecepcionFacturaPage() {
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500">Producto sistema</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-14">Fact.</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-20">Recibido</th>
+                  {(sucursalId === 'a0000000-0000-0000-0000-000000000003' || sucursalId === 'a0000000-0000-0000-0000-000000000004') && (
+                    <th className="text-right px-2 py-2 text-xs font-medium text-indigo-500 w-16" title="Unidades a transferir a SOHO 1">→ S1</th>
+                  )}
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-22">Costo</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-24">P.Venta sug.</th>
                   <th className="text-left px-2 py-2 text-xs font-medium text-zinc-500 w-36">Vencimiento</th>
@@ -1754,6 +1787,24 @@ export default function RecepcionFacturaPage() {
                           />
                         )}
                       </td>
+
+                      {/* Transfer to S1 — only visible when receiving at SOHO 2 */}
+                      {(sucursalId === 'a0000000-0000-0000-0000-000000000003' || sucursalId === 'a0000000-0000-0000-0000-000000000004') && (
+                        <td className="px-2 py-2 text-right">
+                          {item.producto_id && !item.es_granel ? (
+                            <input
+                              type="number" min="0"
+                              max={item.cantidad_recibida}
+                              value={item.transferir_cantidad ?? 0}
+                              onChange={e => updateItem(i, { transferir_cantidad: parseInt(e.target.value) || 0 })}
+                              className="w-14 text-right border border-indigo-200 rounded px-1 py-1 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-indigo-50"
+                              title="Unidades a transferir a SOHO 1"
+                            />
+                          ) : (
+                            <span className="text-zinc-300 text-xs">—</span>
+                          )}
+                        </td>
+                      )}
 
                       {/* Cost */}
                       <td className="px-2 py-2 text-right">
@@ -1979,6 +2030,76 @@ export default function RecepcionFacturaPage() {
             </a>
           </div>
         )}
+
+        {/* Transferencia interna pendiente */}
+        {transferenciaId && (() => {
+          const itemsT = items.filter(i => i.producto_id && !i.es_granel && (i.transferir_cantidad ?? 0) > 0)
+          const sucOrigen = SUCURSALES.find(s => s.id === sucursalId)?.nombre ?? 'SOHO 2'
+          const totalUnidades = itemsT.reduce((s, i) => s + (i.transferir_cantidad ?? 0), 0)
+          const textoTransferencia = [
+            `TRANSFERENCIA INTERNA PENDIENTE`,
+            `De: ${sucOrigen}  →  A: SOHO 1 - La Pieza`,
+            `Fecha recepción: ${new Date().toLocaleDateString('es-AR')}`,
+            '',
+            ...itemsT.map(i =>
+              `  · ${i.producto_sku ?? i.sku_proveedor}  ${i.producto_nombre ?? i.descripcion_proveedor}  —  ${i.transferir_cantidad} unidades`
+            ),
+            '',
+            `Total: ${totalUnidades} unidades`,
+            ``,
+            `→ Cargar en Dux: Movimientos → Transferencia interna`,
+          ].join('\n')
+          return (
+            <div className="rounded-lg border-2 border-indigo-300 bg-indigo-50 px-4 py-4 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">
+                    🔄 Transferencia interna pendiente — {sucOrigen} → SOHO 1
+                  </p>
+                  <p className="text-xs text-indigo-700 mt-0.5">
+                    {itemsT.length} productos · {totalUnidades} unidades totales
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm"
+                    className="border-indigo-300 text-indigo-700"
+                    onClick={() => navigator.clipboard.writeText(textoTransferencia)}
+                  >
+                    Copiar lista
+                  </Button>
+                  <Link href="/transferencias" target="_blank">
+                    <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700">
+                      Ver transferencias →
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+              <div className="bg-white border border-indigo-200 rounded-lg p-3">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-indigo-100">
+                      <th className="text-left text-xs font-medium text-indigo-600 pb-1">SKU</th>
+                      <th className="text-left text-xs font-medium text-indigo-600 pb-1">Producto</th>
+                      <th className="text-right text-xs font-medium text-indigo-600 pb-1">Unidades</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemsT.map((it, idx) => (
+                      <tr key={idx} className="border-b border-indigo-50 last:border-0">
+                        <td className="py-1 text-xs font-mono text-zinc-500">{it.producto_sku ?? it.sku_proveedor}</td>
+                        <td className="py-1 text-xs text-zinc-800">{it.producto_nombre ?? it.descripcion_proveedor}</td>
+                        <td className="py-1 text-xs font-semibold text-indigo-700 text-right">{it.transferir_cantidad}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-indigo-600">
+                <strong>Dux:</strong> Movimientos → Transferencia interna → De {sucOrigen} → A SOHO 1 La Pieza
+              </p>
+            </div>
+          )
+        })()}
 
         {/* Documento para el proveedor (4 categorías) */}
         {docProveedor && (
