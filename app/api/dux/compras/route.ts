@@ -61,11 +61,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Sanitize items:
-  // 1) Remove items with quantity <= 0 or price <= 0 (Dux rejects these)
-  // 2) Merge duplicate id_item entries (Dux rejects arrays with repeated id_item)
-  type DuxItem = { id_item: string; cantidad: number; precio_unitario: number }
-  const productosRaw = (Array.isArray(productos) ? productos : []) as DuxItem[]
+  // Sanitize y convertir al schema real de Dux v2:
+  //   - Array root key: "productos"
+  //   - cod_item (no id_item)
+  //   - ctd (no cantidad)
+  //   - precio_unitario (igual)
+  //   - Filtrar cant=0 o precio=0
+  //   - Mergear duplicados por cod_item
+  type ClientItem = { id_item: string; cantidad: number; precio_unitario: number }
+  type DuxItem    = { cod_item: string; ctd: number; precio_unitario: number; porc_descuento: number }
+
+  const productosRaw = (Array.isArray(productos) ? productos : []) as ClientItem[]
 
   if (productosRaw.length === 0) {
     return NextResponse.json({ error: 'productos array must be non-empty' }, { status: 400 })
@@ -73,36 +79,37 @@ export async function POST(req: NextRequest) {
 
   const validos = productosRaw.filter(p => p.cantidad > 0 && p.precio_unitario > 0)
 
-  // Merge duplicates by id_item: sum quantities, weighted-average price
-  const merged = new Map<string, { cantidad: number; total_valor: number }>()
+  // Merge duplicates by cod_item: sum ctd, weighted-average price
+  const merged = new Map<string, { ctd: number; total_valor: number }>()
   for (const p of validos) {
     const key = String(p.id_item)
-    const existing = merged.get(key)
-    if (existing) {
-      existing.total_valor += p.precio_unitario * p.cantidad
-      existing.cantidad    += p.cantidad
+    const ex  = merged.get(key)
+    if (ex) {
+      ex.total_valor += p.precio_unitario * p.cantidad
+      ex.ctd         += p.cantidad
     } else {
-      merged.set(key, { cantidad: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
+      merged.set(key, { ctd: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
     }
   }
-  const itemsFinal: DuxItem[] = Array.from(merged.entries()).map(([id_item, v]) => ({
-    id_item,
-    cantidad        : v.cantidad,
-    precio_unitario : Math.round(v.total_valor / v.cantidad * 100) / 100,
+
+  const productosFinal: DuxItem[] = Array.from(merged.entries()).map(([cod_item, v]) => ({
+    cod_item,
+    ctd            : v.ctd,
+    precio_unitario: Math.round(v.total_valor / v.ctd * 100) / 100,
+    porc_descuento : 0,
   }))
 
-  if (itemsFinal.length === 0) {
+  if (productosFinal.length === 0) {
     return NextResponse.json({
       error: 'Todos los ítems tienen cantidad=0 o precio=0 — nada para registrar en Dux',
     }, { status: 400 })
   }
 
-  // Dux v2 /compras expects the array under the key "items", not "productos"
-  payload['items'] = itemsFinal
+  payload['productos'] = productosFinal
 
   console.log('[dux/compras] Sending to Dux v2/compras:', JSON.stringify({
     ...payload,
-    items_count  : itemsFinal.length,
+    items_count  : productosFinal.length,
     items_omitted: productosRaw.length - validos.length,
   }))
 
