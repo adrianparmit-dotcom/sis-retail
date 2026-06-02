@@ -17,6 +17,7 @@ interface ProveedorConfig {
   tipo: 'global' | 'sucursal'
   lead_time_dias: number
   dia_pedido: number | null
+  dux_proveedor_id: number | null
 }
 
 interface RowState {
@@ -26,6 +27,7 @@ interface RowState {
   tipo: 'global' | 'sucursal'
   lead_time_dias: string
   dia_pedido: string  // '1'–'7' or '' for none
+  dux_proveedor_id: string  // numeric string or '' for none
   dirty: boolean
   saving: boolean
   saved: boolean
@@ -91,6 +93,7 @@ export default function ProveedoresConfigPage() {
         tipo: cfg?.tipo ?? 'global',
         lead_time_dias: String(cfg?.lead_time_dias ?? 3),
         dia_pedido: cfg?.dia_pedido != null ? String(cfg.dia_pedido) : '',
+        dux_proveedor_id: cfg?.dux_proveedor_id != null ? String(cfg.dux_proveedor_id) : '',
         dirty: false,
         saving: false,
         saved: false,
@@ -126,6 +129,7 @@ export default function ProveedoresConfigPage() {
 
     const leadTimeVal = Math.max(1, parseInt(row.lead_time_dias) || 3)
     const diaPedidoVal = row.dia_pedido !== '' ? parseInt(row.dia_pedido) : null
+    const duxProveedorIdVal = row.dux_proveedor_id !== '' ? parseInt(row.dux_proveedor_id) : null
 
     const existing = configs.find(c => c.nombre === nombre)
     if (existing) {
@@ -136,6 +140,7 @@ export default function ProveedoresConfigPage() {
         tipo: row.tipo,
         lead_time_dias: leadTimeVal,
         dia_pedido: diaPedidoVal,
+        dux_proveedor_id: duxProveedorIdVal,
         updated_at: new Date().toISOString(),
       }).eq('id', existing.id)
     } else {
@@ -147,6 +152,7 @@ export default function ProveedoresConfigPage() {
         tipo: row.tipo,
         lead_time_dias: leadTimeVal,
         dia_pedido: diaPedidoVal,
+        dux_proveedor_id: duxProveedorIdVal,
       }).select('*').single()
       if (data) setConfigs(prev => [...prev, data as ProveedorConfig])
     }
@@ -173,7 +179,7 @@ export default function ProveedoresConfigPage() {
         ...prev,
         [nombre]: {
           frecuencia_dias: '30', margen_costo: '', notas: '', tipo: 'global',
-          lead_time_dias: '3', dia_pedido: '',
+          lead_time_dias: '3', dia_pedido: '', dux_proveedor_id: '',
           dirty: false, saving: false, saved: false,
         },
       }))
@@ -379,6 +385,7 @@ export default function ProveedoresConfigPage() {
             <div className="px-3 py-2.5">Margen %</div>
             <div className="px-3 py-2.5">Plazo entrega</div>
             <div className="px-3 py-2.5">Día pedido</div>
+            <div className="px-3 py-2.5 text-indigo-700" title="ID del proveedor en Dux para registrar compras">ID Dux</div>
             <div className="px-3 py-2.5">Notas</div>
             <div className="px-3 py-2.5"></div>
           </div>
@@ -494,6 +501,17 @@ export default function ProveedoresConfigPage() {
                         )
                       })}
                     </div>
+                  </div>
+                  {/* ID Dux (id_proveedor para compras) */}
+                  <div className="px-3 py-3">
+                    <Input
+                      type="number"
+                      value={row.dux_proveedor_id}
+                      onChange={e => setFieldAny(nombre, 'dux_proveedor_id', e.target.value)}
+                      className="h-8 text-sm w-full font-mono"
+                      placeholder="ej: 17224537"
+                      title="ID del proveedor en Dux (id_proveedor). Se usa para registrar compras."
+                    />
                   </div>
                   {/* Notas */}
                   <div className="px-3 py-3">

@@ -1393,12 +1393,35 @@ export default function RecepcionFacturaPage() {
       // ── 4. POST to Dux v2/compras ────────────────────────────
       // Include all matched items (granel included — Dux needs the purchase registered)
       const duxItems = items.filter(i => i.producto_sku && i.cantidad > 0)
-      const provId   = items.find(i => i.producto_id_dux)?.producto_id_dux
+
+      // Resolve id_proveedor for the Dux purchase:
+      // Priority 1: dux_proveedor_id set explicitly in proveedores_config (by proveedor_nombre)
+      // Priority 2: most frequent proveedor_id_dux across matched items (handles multi-brand distributors)
+      let provId: number | undefined
+      if (factura.proveedor_nombre) {
+        const { data: provCfg } = await supabase.from('proveedores_config')
+          .select('dux_proveedor_id')
+          .ilike('nombre', `%${factura.proveedor_nombre}%`)
+          .not('dux_proveedor_id', 'is', null)
+          .limit(1)
+          .maybeSingle()
+        if (provCfg) provId = (provCfg as { dux_proveedor_id: number }).dux_proveedor_id
+      }
+      if (!provId) {
+        // Fallback: pick the proveedor_id_dux that appears most frequently among items
+        const freq = new Map<number, number>()
+        for (const i of items) {
+          if (i.producto_id_dux) freq.set(i.producto_id_dux, (freq.get(i.producto_id_dux) ?? 0) + 1)
+        }
+        if (freq.size > 0) {
+          provId = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0]
+        }
+      }
 
       if (duxItems.length === 0) {
         setDuxError('La compra NO se cargó en Dux: ningún ítem tiene un SKU del sistema asignado. Cargala manualmente en Dux.')
       } else if (!provId) {
-        setDuxError('La compra NO se cargó en Dux: ninguno de los productos asignados tiene proveedor_id_dux. Asociá el proveedor a estos SKUs en Dux (o cargá la compra manualmente).')
+        setDuxError('La compra NO se cargó en Dux: no se pudo determinar el proveedor en Dux. Configuralo en /compras/proveedores → campo "ID Dux".')
       } else {
         const duxPayload = {
           id_sucursal     : sucursal.dux_sucursal,
