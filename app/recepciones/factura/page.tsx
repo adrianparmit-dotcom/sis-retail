@@ -32,10 +32,12 @@ import { CheckCircle2, HelpCircle, Download, Loader2, ChevronRight, Save, Users,
 // ── Constants ────────────────────────────────────────────────────
 
 const SUCURSALES = [
-  { id: 'a0000000-0000-0000-0000-000000000001', nombre: 'SOHO 1 - Local',    dux_deposito: 7951,  dux_sucursal: 7951 },
-  { id: 'a0000000-0000-0000-0000-000000000002', nombre: 'SOHO 1 - La Pieza', dux_deposito: 8545,  dux_sucursal: 7951 },
-  { id: 'a0000000-0000-0000-0000-000000000003', nombre: 'SOHO 2 - Local',    dux_deposito: 15289, dux_sucursal: 15289 },
-  { id: 'a0000000-0000-0000-0000-000000000004', nombre: 'SOHO 2 - Depósito', dux_deposito: 15513, dux_sucursal: 15289 },
+  // dux_sucursal_id = Dux logical branch ID (1=SOHO1, 3=SOHO2) used in v2/compras
+  // dux_deposito    = Dux warehouse ID used as id_deposito in v2/compras
+  { id: 'a0000000-0000-0000-0000-000000000001', nombre: 'SOHO 1 - Local',    dux_deposito: 7951,  dux_sucursal: 7951,  dux_sucursal_id: 1 },
+  { id: 'a0000000-0000-0000-0000-000000000002', nombre: 'SOHO 1 - La Pieza', dux_deposito: 8545,  dux_sucursal: 7951,  dux_sucursal_id: 1 },
+  { id: 'a0000000-0000-0000-0000-000000000003', nombre: 'SOHO 2 - Local',    dux_deposito: 15289, dux_sucursal: 15289, dux_sucursal_id: 3 },
+  { id: 'a0000000-0000-0000-0000-000000000004', nombre: 'SOHO 2 - Depósito', dux_deposito: 15513, dux_sucursal: 15289, dux_sucursal_id: 3 },
 ]
 
 const PROVEEDOR_LABELS: Record<ProveedorType | 'auto', string> = {
@@ -1424,7 +1426,7 @@ export default function RecepcionFacturaPage() {
         setDuxError('La compra NO se cargó en Dux: no se pudo determinar el proveedor en Dux. Configuralo en /compras/proveedores → campo "ID Dux".')
       } else {
         const duxPayload = {
-          id_sucursal     : sucursal.dux_sucursal,
+          id_sucursal     : sucursal.dux_sucursal_id,  // Dux logical branch: 1=SOHO1, 3=SOHO2
           id_proveedor    : provId,
           id_deposito     : sucursal.dux_deposito,
           fecha           : fechaISO,
