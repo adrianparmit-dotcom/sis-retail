@@ -1410,7 +1410,7 @@ export default function RecepcionFacturaPage() {
           // For granel: use invoice quantity (what physically arrived), not cantidad_recibida
           productos: duxItems.map(i => ({
             id_item         : i.producto_sku!,
-            cantidad        : i.es_granel ? i.cantidad : i.cantidad_recibida,
+            cantidad        : i.cantidad,  // siempre la cantidad de factura (Fact.), no la recibida
             precio_unitario : i.costo_unitario,
           })),
         }
