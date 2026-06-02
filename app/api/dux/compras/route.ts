@@ -3,13 +3,14 @@
  * Server-side proxy for Dux v2 /compras endpoint.
  * Keeps the DUX_API_TOKEN out of the browser.
  *
- * Request body: same as Dux v2 schema:
+ * Client sends `productos` array; this route sanitizes it and sends
+ * it to Dux as `items` (the field name Dux v2 actually expects).
+ *
+ * Request body:
  * {
- *   id_empresa        : 4065,
  *   id_sucursal       : number,
  *   id_proveedor      : number,
  *   id_deposito       : number,
- *   id_personal       : 1,
  *   fecha             : "YYYY-MM-DD",
  *   nro_comprobante   : string,
  *   tipo_comprobante  : "FACTURA",
@@ -44,71 +45,65 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  // Merge server-side constants
+  // Merge server-side constants (id_empresa / id_personal stay server-side)
+  const { productos, ...rest } = body as { productos?: unknown; [k: string]: unknown }
   const payload: Record<string, unknown> = {
     id_empresa  : ID_EMPRESA,
     id_personal : ID_PERSONAL,
-    ...body,
+    ...rest,
   }
 
-  // Validate required fields
-  const required = ['id_sucursal', 'id_proveedor', 'id_deposito', 'fecha', 'nro_comprobante', 'tipo_comprobante', 'productos']
+  // Validate required fields (except productos which we handle separately)
+  const required = ['id_sucursal', 'id_proveedor', 'id_deposito', 'fecha', 'nro_comprobante', 'tipo_comprobante']
   for (const f of required) {
     if (payload[f] === undefined || payload[f] === null || payload[f] === '') {
       return NextResponse.json({ error: `Missing required field: ${f}` }, { status: 400 })
     }
   }
 
-  // Sanitize productos:
+  // Sanitize items:
   // 1) Remove items with quantity <= 0 or price <= 0 (Dux rejects these)
   // 2) Merge duplicate id_item entries (Dux rejects arrays with repeated id_item)
-  //    → sum quantities, weighted-average price
-  type DuxProducto = { id_item: string; cantidad: number; precio_unitario: number }
-  const productosRaw = payload['productos'] as DuxProducto[]
+  type DuxItem = { id_item: string; cantidad: number; precio_unitario: number }
+  const productosRaw = (Array.isArray(productos) ? productos : []) as DuxItem[]
 
-  if (!Array.isArray(productosRaw) || productosRaw.length === 0) {
+  if (productosRaw.length === 0) {
     return NextResponse.json({ error: 'productos array must be non-empty' }, { status: 400 })
   }
 
-  // Step 1: filter out zero-qty / zero-price
   const validos = productosRaw.filter(p => p.cantidad > 0 && p.precio_unitario > 0)
 
-  // Step 2: merge duplicates by id_item (weighted-average price, summed qty)
+  // Merge duplicates by id_item: sum quantities, weighted-average price
   const merged = new Map<string, { cantidad: number; total_valor: number }>()
   for (const p of validos) {
-    const existing = merged.get(p.id_item)
+    const key = String(p.id_item)
+    const existing = merged.get(key)
     if (existing) {
       existing.total_valor += p.precio_unitario * p.cantidad
       existing.cantidad    += p.cantidad
     } else {
-      merged.set(p.id_item, { cantidad: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
+      merged.set(key, { cantidad: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
     }
   }
-  const productosFiltrados: DuxProducto[] = Array.from(merged.entries()).map(([id_item, v]) => ({
+  const itemsFinal: DuxItem[] = Array.from(merged.entries()).map(([id_item, v]) => ({
     id_item,
     cantidad        : v.cantidad,
     precio_unitario : Math.round(v.total_valor / v.cantidad * 100) / 100,
   }))
 
-  if (productosFiltrados.length === 0) {
+  if (itemsFinal.length === 0) {
     return NextResponse.json({
       error: 'Todos los ítems tienen cantidad=0 o precio=0 — nada para registrar en Dux',
     }, { status: 400 })
   }
 
-  const duplicadosEliminados = validos.length - productosFiltrados.length
-  if (duplicadosEliminados > 0) {
-    console.log(`[dux/compras] Mergeados ${duplicadosEliminados} items duplicados`)
-  }
+  // Dux v2 /compras expects the array under the key "items", not "productos"
+  payload['items'] = itemsFinal
 
-  payload['productos'] = productosFiltrados
-
-  // Log payload (excluding token) for debugging
-  console.log('[dux/compras] Payload:', JSON.stringify({
+  console.log('[dux/compras] Sending to Dux v2/compras:', JSON.stringify({
     ...payload,
-    productos_count: productosFiltrados.length,
-    productos_omitidos: productosRaw.length - productosFiltrados.length,
-    productos: productosFiltrados,
+    items_count  : itemsFinal.length,
+    items_omitted: productosRaw.length - validos.length,
   }))
 
   try {
