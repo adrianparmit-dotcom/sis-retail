@@ -145,6 +145,16 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Dux sometimes returns 200 with a business-logic error message
+    // (e.g. {"message":"Empresa no encontrada."}) — detect and treat as error.
+    const dataObj = data as Record<string, unknown> | null
+    if (dataObj && typeof dataObj.message === 'string' && !dataObj.id && !dataObj.ok) {
+      console.error('[dux/compras] Dux 200 with error message:', dataObj.message)
+      return NextResponse.json(
+        { error: `Dux respondió OK pero: ${dataObj.message}`, dux_response: data, payload_sent: payload },
+        { status: 400 }
+      )
+    }
     return NextResponse.json({ ok: true, dux_response: data }, { status: 200 })
   } catch (err) {
     console.error('[dux/compras] Network error:', err)
