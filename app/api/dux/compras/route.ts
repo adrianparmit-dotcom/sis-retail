@@ -48,11 +48,16 @@ export async function POST(req: NextRequest) {
   }
 
   // Merge server-side constants.
-  // id_personal must match the employee linked to the API token in Dux.
-  // Set DUX_ID_PERSONAL in Vercel env vars with the correct employee ID.
-  const { productos, ...rest } = body as { productos?: unknown; [k: string]: unknown }
+  // id_empresa: only include if the env var is set to a valid value (not the 4065 default).
+  //   In Dux v2, if the token uniquely identifies the empresa, omitting id_empresa is fine.
+  //   Set DUX_ID_EMPRESA in Vercel env vars with the correct empresa ID from Dux.
+  // id_personal: must match the employee linked to the API token.
+  const { productos, skip_empresa: _skip, ...rest } = body as {
+    productos?: unknown; skip_empresa?: unknown; [k: string]: unknown
+  }
+  const duxIdEmpresa = process.env.DUX_ID_EMPRESA ? parseInt(process.env.DUX_ID_EMPRESA) : null
   const payload: Record<string, unknown> = {
-    id_empresa  : ID_EMPRESA,
+    ...(duxIdEmpresa ? { id_empresa: duxIdEmpresa } : {}),
     ...(ID_PERSONAL ? { id_personal: ID_PERSONAL } : {}),
     ...rest,
   }
