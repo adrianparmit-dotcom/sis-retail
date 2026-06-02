@@ -45,11 +45,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  // Merge server-side constants. id_personal is omitted: it's optional in Dux v2
-  // and the value must match the API token owner — we don't have that ID stored.
+  // Merge server-side constants.
+  // id_personal must match the employee linked to the API token in Dux.
+  // Set DUX_ID_PERSONAL in Vercel env vars with the correct employee ID.
   const { productos, ...rest } = body as { productos?: unknown; [k: string]: unknown }
   const payload: Record<string, unknown> = {
-    id_empresa : ID_EMPRESA,
+    id_empresa  : ID_EMPRESA,
+    ...(ID_PERSONAL ? { id_personal: ID_PERSONAL } : {}),
     ...rest,
   }
 

@@ -1213,9 +1213,9 @@ export default function RecepcionFacturaPage() {
              ?? 'error desconocido'
     // Build detail string for debugging: show which items were sent
     const payloadSent = e.payload_sent as Record<string, unknown> | undefined
-    const prods = payloadSent?.productos as Array<{id_item:string; cantidad:number; precio_unitario:number}> | undefined
+    const prods = payloadSent?.productos as Array<{cod_item:string; ctd:number; precio_unitario:number}> | undefined
     const detail = prods
-      ? `Items enviados a Dux: ${prods.map(p => `${p.id_item} (cant:${p.cantidad} precio:${p.precio_unitario})`).join(' | ')}`
+      ? `Items enviados a Dux: ${prods.map(p => `${p.cod_item} (cant:${p.ctd} precio:${p.precio_unitario})`).join(' | ')}`
       : undefined
     return { msg: `Dux ${res.status}: ${msg}`, detail }
   }
