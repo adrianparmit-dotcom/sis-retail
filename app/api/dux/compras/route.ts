@@ -20,6 +20,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 
+export const maxDuration = 60
+
 const DUX_BASE    = 'https://erp.duxsoftware.com.ar/WSERP/rest/services'
 const DUX_TOKEN   = process.env.DUX_API_TOKEN ?? ''
 const ID_EMPRESA  = parseInt(process.env.DUX_ID_EMPRESA ?? '4065')
