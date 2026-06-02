@@ -59,19 +59,46 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Filter productos: remove items with quantity <= 0 or price <= 0 (Dux rejects these)
+  // Sanitize productos:
+  // 1) Remove items with quantity <= 0 or price <= 0 (Dux rejects these)
+  // 2) Merge duplicate id_item entries (Dux rejects arrays with repeated id_item)
+  //    → sum quantities, weighted-average price
   type DuxProducto = { id_item: string; cantidad: number; precio_unitario: number }
   const productosRaw = payload['productos'] as DuxProducto[]
-  const productosFiltrados = productosRaw.filter(p => p.cantidad > 0 && p.precio_unitario > 0)
 
   if (!Array.isArray(productosRaw) || productosRaw.length === 0) {
     return NextResponse.json({ error: 'productos array must be non-empty' }, { status: 400 })
   }
 
+  // Step 1: filter out zero-qty / zero-price
+  const validos = productosRaw.filter(p => p.cantidad > 0 && p.precio_unitario > 0)
+
+  // Step 2: merge duplicates by id_item (weighted-average price, summed qty)
+  const merged = new Map<string, { cantidad: number; total_valor: number }>()
+  for (const p of validos) {
+    const existing = merged.get(p.id_item)
+    if (existing) {
+      existing.total_valor += p.precio_unitario * p.cantidad
+      existing.cantidad    += p.cantidad
+    } else {
+      merged.set(p.id_item, { cantidad: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
+    }
+  }
+  const productosFiltrados: DuxProducto[] = Array.from(merged.entries()).map(([id_item, v]) => ({
+    id_item,
+    cantidad        : v.cantidad,
+    precio_unitario : Math.round(v.total_valor / v.cantidad * 100) / 100,
+  }))
+
   if (productosFiltrados.length === 0) {
     return NextResponse.json({
       error: 'Todos los ítems tienen cantidad=0 o precio=0 — nada para registrar en Dux',
     }, { status: 400 })
+  }
+
+  const duplicadosEliminados = validos.length - productosFiltrados.length
+  if (duplicadosEliminados > 0) {
+    console.log(`[dux/compras] Mergeados ${duplicadosEliminados} items duplicados`)
   }
 
   payload['productos'] = productosFiltrados
