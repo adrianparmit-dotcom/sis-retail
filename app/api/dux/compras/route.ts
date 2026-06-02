@@ -55,9 +55,9 @@ export async function POST(req: NextRequest) {
   const { productos, skip_empresa: _skip, ...rest } = body as {
     productos?: unknown; skip_empresa?: unknown; [k: string]: unknown
   }
-  const duxIdEmpresa = process.env.DUX_ID_EMPRESA ? parseInt(process.env.DUX_ID_EMPRESA) : null
+  const duxIdEmpresa = parseInt(process.env.DUX_ID_EMPRESA || '4065')  // SHUK SRL = 4065
   const payload: Record<string, unknown> = {
-    ...(duxIdEmpresa ? { id_empresa: duxIdEmpresa } : {}),
+    id_empresa : duxIdEmpresa,
     ...(ID_PERSONAL ? { id_personal: ID_PERSONAL } : {}),
     ...rest,
   }
