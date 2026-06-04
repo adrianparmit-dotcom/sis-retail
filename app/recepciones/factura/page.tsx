@@ -580,6 +580,7 @@ export default function RecepcionFacturaPage() {
   const [step, setStep]                       = useState<Step>('paste')
   const [texto, setTexto]                     = useState('')
   const [tipoProveedor, setTipoProveedor]     = useState<ProveedorType | 'auto'>('auto')
+  const [letraComprobante, setLetraComprobante] = useState<'A' | 'B' | 'C'>('A')
   const [sucursalId, setSucursalId]           = useState(SUCURSALES[0].id)
   const [factura, setFactura]                 = useState<ParsedFactura | null>(null)
   const [items, setItems]                     = useState<InvoiceLineItem[]>([])
@@ -1431,7 +1432,7 @@ export default function RecepcionFacturaPage() {
           id_deposito     : sucursal.dux_deposito,
           fecha           : fechaISO,
           nro_comprobante : factura.nro_comprobante || 'S/N',
-          tipo_comprobante: 'FACTURA',
+          tipo_comprobante: letraComprobante,
           // For granel: use invoice quantity (what physically arrived), not cantidad_recibida
           productos: duxItems.map(i => ({
             id_item         : i.producto_sku!,
@@ -1589,6 +1590,17 @@ export default function RecepcionFacturaPage() {
                 {Object.entries(PROVEEDOR_LABELS).map(([k, v]) => (
                   <SelectItem key={k} value={k}>{v}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-1 block">Letra factura</label>
+            <Select value={letraComprobante} onValueChange={v => setLetraComprobante(v as 'A' | 'B' | 'C')}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="A">Factura A (RI → RI)</SelectItem>
+                <SelectItem value="B">Factura B (RI → CF)</SelectItem>
+                <SelectItem value="C">Factura C (Monotributo)</SelectItem>
               </SelectContent>
             </Select>
           </div>
