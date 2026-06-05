@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import type { ReposicionItem } from '@/lib/types'
+import { matchesQuery } from '@/lib/search'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -172,7 +173,7 @@ export default function ReposicionPage() {
   const filtered = useMemo(() =>
     enriched
       .filter(r => {
-        if (search && !`${r.nombre} ${r.sku}`.toLowerCase().includes(search.toLowerCase())) return false
+        if (search && !matchesQuery(search, r.nombre, r.sku)) return false
         if (filtro !== 'todos' && r.rec.accion !== filtro) return false
         return true
       })

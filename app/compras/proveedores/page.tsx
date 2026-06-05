@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, Save, Plus, Info, RefreshCw, Link2, AlertCircle } from 'lucide-react'
+import { matchesQuery } from '@/lib/search'
 import Link from 'next/link'
 
 interface ProveedorConfig {
@@ -228,7 +229,7 @@ export default function ProveedoresConfigPage() {
   const configSet = useMemo(() => new Set(configs.map(c => c.nombre)), [configs])
 
   const filtered = useMemo(() =>
-    search ? nombres.filter(n => n.toLowerCase().includes(search.toLowerCase())) : nombres,
+    search ? nombres.filter(n => matchesQuery(search, n)) : nombres,
     [nombres, search]
   )
 

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
+import { matchesQuery } from '@/lib/search'
 import { PROMO_ESTADOS, type PromoEstado } from '@/lib/constants'
 import { Printer, Search, X, Star } from 'lucide-react'
 import Link from 'next/link'
@@ -301,13 +302,13 @@ export default function PromocionesPage() {
   }, [])
 
   const filteredSugs = useMemo(() =>
-    sugerencias.filter(s => !search || `${s.nombre} ${s.sku}`.toLowerCase().includes(search.toLowerCase())),
+    sugerencias.filter(s => !search || matchesQuery(search, s.nombre, s.sku)),
     [sugerencias, search]
   )
 
   const filteredGuardadas = useMemo(() =>
     guardadas.filter(p => {
-      if (search && !`${p.nombre} ${p.sku}`.toLowerCase().includes(search.toLowerCase())) return false
+      if (search && !matchesQuery(search, p.nombre, p.sku)) return false
       if (filtroEstado !== 'todos' && p.estado !== filtroEstado) return false
       return true
     }),

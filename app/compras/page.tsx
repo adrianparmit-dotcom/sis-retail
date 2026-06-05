@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { ProductoCompra } from '@/lib/types'
+import { matchesQuery } from '@/lib/search'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -120,7 +121,7 @@ function ProviderCombobox({
   useOutsideClick(ref, close)
 
   const filteredList = search
-    ? proveedores.filter(p => p.toLowerCase().includes(search.toLowerCase()))
+    ? proveedores.filter(p => matchesQuery(search, p))
     : proveedores
 
   return (
@@ -184,7 +185,7 @@ function CategoryCombobox({
   useOutsideClick(ref, close)
 
   const filteredList = search
-    ? categorias.filter(c => c.toLowerCase().includes(search.toLowerCase()))
+    ? categorias.filter(c => matchesQuery(search, c))
     : categorias
 
   return (
@@ -370,7 +371,7 @@ export default function ComprasPage() {
 
   const filtered = useMemo(() => {
     const result = data.filter(p => {
-      if (search && !`${p.nombre} ${p.sku} ${p.marca}`.toLowerCase().includes(search.toLowerCase())) return false
+      if (search && !matchesQuery(search, p.nombre, p.sku, p.marca)) return false
       if (categoria !== 'todas' && p.categoria !== categoria) return false
       if (selectedProviders.size > 0 && !selectedProviders.has(p.proveedor_nombre ?? '')) return false
       if (sucursal === 'soho1' && p.location_id != null && p.location_nombre !== 'SOHO 1') return false

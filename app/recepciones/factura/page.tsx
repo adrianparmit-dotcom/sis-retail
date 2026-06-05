@@ -23,6 +23,7 @@ import { parseFactura, calcPrecioVenta, detectProveedorType } from '@/lib/invoic
 import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorToPDF, type DocumentoProveedor } from '@/lib/proveedor-doc'
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
+import { normalizeText } from '@/lib/search'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -289,16 +290,16 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
 
   // Match by SKU, barcode or name. Pure SKU/barcode matches rank highest.
   const ranked = useMemo(() => {
-    const query = q.trim().toLowerCase()
+    const query = normalizeText(q.trim())
     if (!query) return [] as Producto[]
     const tokenize = (s: string) =>
-      s.toLowerCase().replace(/[^a-z0-9áéíóúñ]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
+      normalizeText(s).replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
     const qt = tokenize(query)
     const ctxTokens = supplierContext ? new Set(tokenize(supplierContext)) : null
     const scored = productos.map(p => {
-      const sku  = (p.sku ?? '').toLowerCase()
-      const ean  = (p.codigo_barras ?? '').toLowerCase()
-      const name = (p.nombre ?? '').toLowerCase()
+      const sku  = normalizeText(p.sku)
+      const ean  = normalizeText(p.codigo_barras)
+      const name = normalizeText(p.nombre)
 
       // 1) Exact / prefix SKU or barcode match → top priority
       if (sku === query || ean === query) return { p, score: 1000 }
@@ -440,10 +441,10 @@ function GranelMapper({ productos, supplierContext, derivados, onChange, onClose
   useEffect(() => { inputRef.current?.focus() }, [])
 
   const ranked = useMemo(() => {
-    const query = q.trim().toLowerCase()
+    const query = normalizeText(q.trim())
     if (!query) return [] as Producto[]
     const tokenize = (s: string) =>
-      s.toLowerCase().replace(/[^a-z0-9áéíóúñ]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
+      normalizeText(s).replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
     const qt = tokenize(query)
     const ctxTokens = new Set(tokenize(supplierContext))
     const alreadyAdded = new Set(derivados.map(d => d.producto_id))

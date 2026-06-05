@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Search, X, Barcode } from 'lucide-react'
 import { useOutsideClick } from '@/lib/hooks/use-outside-click'
 import type { ProductoStock } from '@/lib/types'
+import { matchesQuery } from '@/lib/search'
 import { cn } from '@/lib/utils'
 
 interface ProductPickerProps {
@@ -53,15 +54,7 @@ export function ProductPicker({
   const filtered = query.trim().length < 1
     ? []
     : productos
-        .filter((p) => {
-          const q = query.toLowerCase()
-          return (
-            p.nombre?.toLowerCase().includes(q) ||
-            p.sku.toLowerCase().includes(q) ||
-            p.codigo_barras?.toLowerCase().includes(q) ||
-            p.categoria?.toLowerCase().includes(q)
-          )
-        })
+        .filter((p) => matchesQuery(query, p.nombre, p.sku, p.codigo_barras, p.categoria))
         .slice(0, 60)
 
   const handleSelect = useCallback((producto: ProductoStock) => {

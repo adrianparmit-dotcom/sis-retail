@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { ReconciliacionItem } from '@/lib/types'
+import { matchesQuery } from '@/lib/search'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -61,7 +62,7 @@ export default function ReconciliacionPage() {
 
   const filtered = useMemo(() => {
     return data.filter(d => {
-      if (search && !`${d.nombre} ${d.sku}`.toLowerCase().includes(search.toLowerCase())) return false
+      if (search && !matchesQuery(search, d.nombre, d.sku)) return false
       if (filtroEstado !== 'todos' && d.estado_reconciliacion !== filtroEstado) return false
       if (filtroCategoria !== 'todas' && d.categoria !== filtroCategoria) return false
       return true

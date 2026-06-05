@@ -7,6 +7,7 @@ import { Pencil, X, Download } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Vencimiento, ProductoStock } from '@/lib/types'
 import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
+import { matchesQuery } from '@/lib/search'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -116,7 +117,7 @@ export default function VencimientosPage() {
 
   const filteredVenc = useMemo(() => {
     return vencimientos.filter(v => {
-      if (search && !`${v.nombre} ${v.sku}`.toLowerCase().includes(search.toLowerCase())) return false
+      if (search && !matchesQuery(search, v.nombre, v.sku)) return false
       if (estado !== 'todos' && v.estado !== estado) return false
       if (sucursal !== 'todas' && v.sucursal !== sucursal) return false
       return true
@@ -125,9 +126,7 @@ export default function VencimientosPage() {
 
   const filteredPend = useMemo(() => {
     if (!search) return pendientes
-    return pendientes.filter(p =>
-      `${p.nombre} ${p.sku}`.toLowerCase().includes(search.toLowerCase())
-    )
+    return pendientes.filter(p => matchesQuery(search, p.nombre, p.sku))
   }, [pendientes, search])
 
   const counts = useMemo(() => {

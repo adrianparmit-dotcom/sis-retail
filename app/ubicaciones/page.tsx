@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
+import { matchesQuery } from '@/lib/search'
 
 const PIEZA_ID = 'a0000000-0000-0000-0000-000000000002'
 const DEPOSITO_ID = 'a0000000-0000-0000-0000-000000000004'
@@ -128,12 +129,11 @@ export default function UbicacionesPage() {
   // ── Search / highlight ────────────────────────────────────────────────
   const matchingIds = useMemo(() => {
     if (!search) return null
-    const term = search.toLowerCase()
     const ids = new Set<string>()
     for (const c of tabCajones) {
       const prods = cajonProductosMap.get(c.id) ?? []
-      const hay = `${c.codigo} ${prods.map(cp => `${cp.producto.nombre ?? ''} ${cp.producto.sku}`).join(' ')}`.toLowerCase()
-      if (hay.includes(term)) ids.add(c.id)
+      const hay = `${c.codigo} ${prods.map(cp => `${cp.producto.nombre ?? ''} ${cp.producto.sku}`).join(' ')}`
+      if (matchesQuery(search, hay)) ids.add(c.id)
     }
     return ids
   }, [tabCajones, search, cajonProductosMap])
@@ -177,7 +177,7 @@ export default function UbicacionesPage() {
   // ── Product search for add ────────────────────────────────────────────
   const filteredProd = useMemo(() =>
     searchProd.length >= 2
-      ? productos.filter(p => `${p.nombre ?? ''} ${p.sku}`.toLowerCase().includes(searchProd.toLowerCase())).slice(0, 8)
+      ? productos.filter(p => matchesQuery(searchProd, p.nombre, p.sku)).slice(0, 8)
       : [],
     [productos, searchProd]
   )

@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Printer, Search, X, TrendingUp, Eye, RefreshCw, Tag, Download, CheckSquare, Square } from 'lucide-react'
 import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
+import { matchesQuery } from '@/lib/search'
 
 // ─── Types ───────────────────────────────────────────────────────────
 interface Producto {
@@ -125,12 +126,7 @@ export default function PreciosPage() {
 
   const productosFiltrados = useMemo(() => {
     if (!busqueda.trim()) return productos
-    const q = busqueda.toLowerCase()
-    return productos.filter(p =>
-      p.nombre.toLowerCase().includes(q) ||
-      p.sku.toLowerCase().includes(q) ||
-      (p.categoria ?? '').toLowerCase().includes(q)
-    )
+    return productos.filter(p => matchesQuery(busqueda, p.nombre, p.sku, p.categoria))
   }, [productos, busqueda])
 
   const paraImprimir = useMemo(() =>

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { matchesQuery } from '@/lib/search'
 
 function ProductPicker({ value, onChange, productos, placeholder }: {
   value: string
@@ -25,7 +26,7 @@ function ProductPicker({ value, onChange, productos, placeholder }: {
 
   const filtered = useMemo(() =>
     search.length >= 1
-      ? productos.filter(p => `${p.nombre ?? ''} ${p.sku} ${p.codigo_barras ?? ''}`.toLowerCase().includes(search.toLowerCase())).slice(0, 15)
+      ? productos.filter(p => matchesQuery(search, p.nombre, p.sku, p.codigo_barras)).slice(0, 15)
       : [],
     [productos, search]
   )
@@ -188,7 +189,7 @@ export default function FraccionamientoPage() {
 
   const filteredProductos = useMemo(() =>
     searchOrigen
-      ? productos.filter(p => `${p.nombre} ${p.sku} ${p.codigo_barras ?? ''}`.toLowerCase().includes(searchOrigen.toLowerCase())).slice(0, 20)
+      ? productos.filter(p => matchesQuery(searchOrigen, p.nombre, p.sku, p.codigo_barras)).slice(0, 20)
       : productos.slice(0, 20),
     [productos, searchOrigen]
   )

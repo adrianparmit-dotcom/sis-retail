@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
+import { tokenize } from '@/lib/search'
 
 const SUCURSALES = [
   { id: 'a0000000-0000-0000-0000-000000000001', nombre: 'SOHO 1 - Local' },
@@ -162,12 +163,17 @@ function CargaRapidaContent() {
       return
     }
 
-    // Fallback: search by name
-    const { data: nameMatches } = await supabase
+    // Fallback: search by name — tokens en cualquier orden, todos deben aparecer.
+    // Ej: "gel ultra tech" matchea "ENERGY GEL ... ULTRATECH".
+    const tokens = tokenize(q)
+    let nameQuery = supabase
       .from('productos')
       .select('id,sku,nombre,categoria,stock_dux,codigo_barras')
-      .ilike('nombre', `%${q}%`)
       .limit(10)
+    for (const t of tokens) nameQuery = nameQuery.ilike('nombre', `%${t}%`)
+    const { data: nameMatches } = tokens.length > 0
+      ? await nameQuery
+      : { data: null }
 
     if (nameMatches && nameMatches.length > 0) {
       if (nameMatches.length === 1) {

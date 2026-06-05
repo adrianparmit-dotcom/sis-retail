@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Input } from '@/components/ui/input'
+import { matchesQuery } from '@/lib/search'
 import Link from 'next/link'
 
 interface ProductoSinProveedor {
@@ -55,17 +56,14 @@ export default function SinProveedorPage() {
   const filtered = useMemo(() => {
     return productos.filter(p => {
       if (filtroCategoria !== 'todas' && (p.categoria ?? 'Sin categoría') !== filtroCategoria) return false
-      if (search) {
-        const h = `${p.nombre ?? ''} ${p.sku} ${p.categoria ?? ''}`.toLowerCase()
-        if (!h.includes(search.toLowerCase())) return false
-      }
+      if (search && !matchesQuery(search, p.nombre, p.sku, p.categoria)) return false
       return true
     })
   }, [productos, filtroCategoria, search])
 
   const sugerencias = useMemo(() =>
     editValue
-      ? proveedoresExistentes.filter(p => p.toLowerCase().includes(editValue.toLowerCase())).slice(0, 8)
+      ? proveedoresExistentes.filter(p => matchesQuery(editValue, p)).slice(0, 8)
       : proveedoresExistentes.slice(0, 8),
     [proveedoresExistentes, editValue]
   )
