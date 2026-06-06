@@ -36,6 +36,14 @@ interface PriceChange {
   visto: boolean
 }
 
+// Forma mínima que necesita la impresión de una etiqueta (Producto la cumple).
+interface LabelData {
+  id: string
+  sku: string
+  nombre: string
+  precio_venta: number | null
+}
+
 type Sucursal = 'soho1' | 'soho2'
 type Tab = 'etiquetas' | 'aumentos'
 
@@ -93,10 +101,12 @@ export default function PreciosPage() {
   const [loading, setLoading]         = useState(true)
   const [busqueda, setBusqueda]       = useState('')
   const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set())
+  const [selAumentos, setSelAumentos] = useState<Set<number>>(new Set())
   const [tab, setTab]                 = useState<Tab>('etiquetas')
   const [sucursal, setSucursal]       = useState<Sucursal>('soho1')
   const [markingVisto, setMarkingVisto] = useState(false)
   const [imprimiendo, setImprimiendo] = useState(false)
+  const [printItems, setPrintItems]   = useState<LabelData[]>([])
   const [vista, setVista]             = useState<'tarjetas' | 'lista'>('tarjetas')
 
   const fetchProductos = useCallback(async (suc: Sucursal) => {
@@ -145,10 +155,45 @@ export default function PreciosPage() {
     })
   }
 
+  const seleccionarTodos = () => setSeleccionados(new Set(productosFiltrados.map(p => p.id)))
+
+  // ── Aumentos → etiquetas ──────────────────────────────────────
+  const productoBySku = useMemo(() => {
+    const m = new Map<string, Producto>()
+    for (const p of productos) m.set(p.sku, p)
+    return m
+  }, [productos])
+
+  // Imprime usando el precio vivo del producto si existe; si no, el precio_nuevo del cambio.
+  const aumentosParaImprimir = useMemo<LabelData[]>(() =>
+    cambios.filter(c => selAumentos.has(c.id)).map(c => {
+      const prod = productoBySku.get(c.sku)
+      return {
+        id: `pc-${c.id}`,
+        sku: c.sku,
+        nombre: prod?.nombre ?? c.nombre,
+        precio_venta: prod?.precio_venta ?? c.precio_nuevo,
+      }
+    }),
+    [cambios, selAumentos, productoBySku]
+  )
+
+  const toggleAumento = (id: number) => {
+    setSelAumentos(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
   const sinVer  = cambios.filter(c => !c.visto).length
   const hojas   = Math.ceil(paraImprimir.length / 36)
+  const hojasAumentos = Math.ceil(aumentosParaImprimir.length / 36)
 
-  const handlePrint = () => {
+  const handlePrint = (items: LabelData[]) => {
+    if (items.length === 0) return
+    setPrintItems(items)
     setImprimiendo(true)
     setTimeout(() => {
       window.print()
@@ -269,6 +314,13 @@ export default function PreciosPage() {
                 ))}
               </div>
 
+              {/* Seleccionar todos los visibles */}
+              {productosFiltrados.length > 0 && seleccionados.size < productosFiltrados.length && (
+                <Button variant="outline" size="sm" onClick={seleccionarTodos} className="gap-1.5 h-9 shrink-0">
+                  <CheckSquare size={14} /> Seleccionar todos ({productosFiltrados.length})
+                </Button>
+              )}
+
               {/* Selection badge */}
               {seleccionados.size > 0 && (
                 <Badge variant="outline" className="gap-1.5 px-3 py-1.5 shrink-0">
@@ -279,7 +331,7 @@ export default function PreciosPage() {
               )}
 
               {/* Print button */}
-              <Button onClick={handlePrint} disabled={paraImprimir.length === 0 || imprimiendo} className="gap-1.5 h-9 shrink-0">
+              <Button onClick={() => handlePrint(paraImprimir)} disabled={paraImprimir.length === 0 || imprimiendo} className="gap-1.5 h-9 shrink-0">
                 <Printer size={14} />
                 {imprimiendo ? 'Preparando…'
                   : seleccionados.size > 0 ? `Reimprimir ${seleccionados.size}`
@@ -355,13 +407,37 @@ export default function PreciosPage() {
         {/* ── TAB AUMENTOS ──────────────────────────────────────── */}
         {tab === 'aumentos' && (
           <>
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <p className="text-sm text-zinc-500">{cambios.length} cambios detectados por el sync de Dux</p>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2 items-center">
                 {cambios.length > 0 && (
-                  <Button variant="outline" size="sm" onClick={exportarAumentosExcel} className="gap-1.5">
-                    <Download size={14} /> Exportar Excel
-                  </Button>
+                  <>
+                    {sinVer > 0 && (
+                      <Button variant="outline" size="sm"
+                        onClick={() => setSelAumentos(new Set(cambios.filter(c => !c.visto).map(c => c.id)))}
+                        className="gap-1.5">
+                        <CheckSquare size={14} /> Seleccionar sin ver ({sinVer})
+                      </Button>
+                    )}
+                    <Button variant="outline" size="sm"
+                      onClick={() => setSelAumentos(new Set(cambios.map(c => c.id)))} className="gap-1.5">
+                      <CheckSquare size={14} /> Todos ({cambios.length})
+                    </Button>
+                    {selAumentos.size > 0 && (
+                      <Button variant="outline" size="sm" onClick={() => setSelAumentos(new Set())} className="gap-1.5">
+                        <X size={14} /> Limpiar
+                      </Button>
+                    )}
+                    <Button onClick={() => handlePrint(aumentosParaImprimir)}
+                      disabled={selAumentos.size === 0 || imprimiendo} size="sm" className="gap-1.5">
+                      <Printer size={14} />
+                      {imprimiendo ? 'Preparando…'
+                        : `Imprimir ${selAumentos.size} etiqueta${selAumentos.size !== 1 ? 's' : ''}${selAumentos.size > 0 ? ` (${hojasAumentos} hoja${hojasAumentos > 1 ? 's' : ''})` : ''}`}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={exportarAumentosExcel} className="gap-1.5">
+                      <Download size={14} /> Excel
+                    </Button>
+                  </>
                 )}
                 {sinVer > 0 && (
                   <Button variant="outline" size="sm" onClick={marcarTodosVistos} disabled={markingVisto} className="gap-1.5">
@@ -375,7 +451,20 @@ export default function PreciosPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-4"></TableHead>
+                      <TableHead className="w-8">
+                        <button
+                          onClick={() => setSelAumentos(
+                            selAumentos.size === cambios.length && cambios.length > 0
+                              ? new Set()
+                              : new Set(cambios.map(c => c.id))
+                          )}
+                          title={selAumentos.size === cambios.length ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                          className="flex items-center">
+                          {selAumentos.size === cambios.length && cambios.length > 0
+                            ? <CheckSquare size={15} className="text-blue-600" />
+                            : <Square size={15} className="text-zinc-300" />}
+                        </button>
+                      </TableHead>
                       <TableHead>SKU</TableHead>
                       <TableHead>Nombre</TableHead>
                       <TableHead className="text-right">Anterior</TableHead>
@@ -386,9 +475,16 @@ export default function PreciosPage() {
                   </TableHeader>
                   <TableBody>
                     {cambios.map(c => (
-                      <TableRow key={c.id} className={c.visto ? 'opacity-50' : ''}>
+                      <TableRow key={c.id}
+                        className={`cursor-pointer hover:bg-zinc-50 ${c.visto ? 'opacity-50' : ''}`}
+                        onClick={() => toggleAumento(c.id)}>
                         <TableCell>
-                          {!c.visto && <div className="w-2 h-2 rounded-full bg-orange-400" />}
+                          <div className="flex items-center gap-1.5">
+                            {selAumentos.has(c.id)
+                              ? <CheckSquare size={15} className="text-blue-600" />
+                              : <Square size={15} className="text-zinc-300" />}
+                            {!c.visto && <div className="w-2 h-2 rounded-full bg-orange-400" title="Sin ver" />}
+                          </div>
                         </TableCell>
                         <TableCell className="font-mono text-xs text-zinc-400">{c.sku}</TableCell>
                         <TableCell className="text-sm font-medium max-w-60 truncate">{toTitleCase(c.nombre)}</TableCell>
@@ -423,7 +519,7 @@ export default function PreciosPage() {
 
       {/* ── PRINT AREA ────────────────────────────────────────────── */}
       <div id="print-area">
-        {imprimiendo && <PrintSheet productos={paraImprimir} />}
+        {imprimiendo && <PrintSheet productos={printItems} />}
       </div>
     </>
   )
@@ -541,7 +637,7 @@ function LabelCard({ producto, seleccionado, onClick }: {
 }
 
 // ─── Print sheet ─────────────────────────────────────────────────────
-function PrintSheet({ productos }: { productos: Producto[] }) {
+function PrintSheet({ productos }: { productos: LabelData[] }) {
   if (productos.length === 0) return null
   return (
     <div style={{
@@ -557,7 +653,7 @@ function PrintSheet({ productos }: { productos: Producto[] }) {
   )
 }
 
-function PrintLabel({ producto }: { producto: Producto }) {
+function PrintLabel({ producto }: { producto: LabelData }) {
   const { titulo, variante } = parseLabel(producto.nombre)
   const badges = detectBadges(producto.nombre)
 
