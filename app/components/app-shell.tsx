@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { NavLink, NavSection } from './nav-link'
 import { PreciosBadge } from './precios-badge'
+import { AyudaChat } from './ayuda-chat'
 
 // Routes that should NOT show the sidebar
 const NO_SIDEBAR_PATHS = ['/login']
@@ -73,6 +74,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <main className="flex-1 min-w-0 overflow-y-auto bg-slate-50">
         {children}
       </main>
+
+      {/* ── Ayuda flotante (todas las pantallas con sidebar) ── */}
+      <AyudaChat />
 
     </div>
   )
