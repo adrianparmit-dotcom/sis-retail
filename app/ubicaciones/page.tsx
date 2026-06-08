@@ -42,14 +42,32 @@ interface CajonProducto {
   producto: { id: string; sku: string; nombre: string | null }
 }
 
+// Una fila por (sucursal, producto) con lo contado en cajones vs lo que Dux dice
+// para esa sucursal. `diferencia = stock_dux - total_cajones`. Negativa ⇒ los
+// cajones tienen MÁS que Dux (probable venta no descontada). Positiva ⇒ hay stock
+// en la sucursal fuera de cajón (góndola u otro lugar no mapeado).
+interface DuxResumen {
+  sucursal_id: string
+  producto_id: string
+  total_cajones: number
+  stock_dux: number
+  diferencia: number
+}
+
+// Umbral mínimo para considerar significativa una diferencia positiva (Dux > cajón).
+// Evita ruido cuando hay 1-2 unidades sueltas en góndola.
+const DESFASE_POSITIVO_MIN = 3
+
 export default function UbicacionesPage() {
   const [cajones, setCajones] = useState<Cajon[]>([])
   const [cajonProductos, setCajonProductos] = useState<CajonProducto[]>([])
   const [productos, setProductos] = useState<Producto[]>([])
+  const [duxResumen, setDuxResumen] = useState<DuxResumen[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'pieza' | 'deposito'>('pieza')
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [soloDesfases, setSoloDesfases] = useState(false)
 
   // Quantities being edited (cpId → draft string)
   const [qtyEdits, setQtyEdits] = useState<Record<string, string>>({})
@@ -75,17 +93,19 @@ export default function UbicacionesPage() {
 
   useEffect(() => {
     const load = async () => {
-      const [cajonRes, cpRes, allProds] = await Promise.all([
+      const [cajonRes, cpRes, allProds, duxRes] = await Promise.all([
         supabase.from('cajones').select('id,sucursal_id,codigo,sector,numero,nota').order('sector').order('numero'),
         supabase.from('cajon_productos').select('id,cajon_id,producto_id,cantidad,producto:productos(id,sku,nombre)'),
         fetchAllFromView<Producto>('productos', {
           select: 'id,sku,nombre,codigo_barras',
           order: { column: 'nombre', ascending: true },
         }),
+        supabase.from('v_cajones_dux_resumen').select('sucursal_id,producto_id,total_cajones,stock_dux,diferencia'),
       ])
       setCajones((cajonRes.data ?? []) as Cajon[])
       setCajonProductos((cpRes.data ?? []) as unknown as CajonProducto[])
       setProductos(allProds)
+      setDuxResumen((duxRes.data ?? []) as DuxResumen[])
       setLoading(false)
     }
     load()
@@ -100,6 +120,28 @@ export default function UbicacionesPage() {
     return map
   }, [cajonProductos])
 
+  // Lookup `${producto_id}:${sucursal_id}` → resumen Dux. Lo usamos para mostrar
+  // el stock Dux al lado de cada producto del cajón y marcar desfases.
+  const duxByKey = useMemo(() => {
+    const m = new Map<string, DuxResumen>()
+    for (const r of duxResumen) m.set(`${r.producto_id}:${r.sucursal_id}`, r)
+    return m
+  }, [duxResumen])
+
+  // Clasifica el desfase a nivel (producto, sucursal). 'none' = sin datos Dux.
+  // 'ok' = igual. 'cajon_mas' = los cajones tienen más que Dux (probable venta).
+  // 'dux_mas' = Dux tiene más que los cajones por arriba del umbral (stock fuera).
+  type DesfaseKind = 'none' | 'ok' | 'cajon_mas' | 'dux_mas'
+  const desfaseKind = useCallback((cp: CajonProducto, sucursalId: string): DesfaseKind => {
+    const r = duxByKey.get(`${cp.producto_id}:${sucursalId}`)
+    if (!r) return 'none'
+    const d = Number(r.diferencia)
+    if (d === 0) return 'ok'
+    if (d < 0) return 'cajon_mas'
+    if (d >= DESFASE_POSITIVO_MIN) return 'dux_mas'
+    return 'ok'
+  }, [duxByKey])
+
   const barcodeToProducto = useMemo(() => new Map(
     productos.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p])
   ), [productos])
@@ -113,6 +155,20 @@ export default function UbicacionesPage() {
     [cajones, activeSucursal]
   )
 
+  // Cajones con al menos un producto en desfase (cajon_mas o dux_mas).
+  // Lo precalculamos por (sucursal) para los chips de las tabs.
+  const cajonesConDesfase = useMemo(() => {
+    const set = new Set<string>()
+    for (const c of cajones) {
+      const prods = cajonProductosMap.get(c.id) ?? []
+      for (const cp of prods) {
+        const k = desfaseKind(cp, c.sucursal_id)
+        if (k === 'cajon_mas' || k === 'dux_mas') { set.add(c.id); break }
+      }
+    }
+    return set
+  }, [cajones, cajonProductosMap, desfaseKind])
+
   const tabStats = useMemo(() => {
     const compute = (sid: string) => {
       const cs = cajones.filter(c => c.sucursal_id === sid)
@@ -121,22 +177,30 @@ export default function UbicacionesPage() {
         total: cs.length,
         ocupados: cs.filter(c => (cajonProductosMap.get(c.id)?.length ?? 0) > 0).length,
         sinContar: all.filter(cp => cp.cantidad === 0).length,
+        desfases: cs.filter(c => cajonesConDesfase.has(c.id)).length,
       }
     }
     return { pieza: compute(PIEZA_ID), deposito: compute(DEPOSITO_ID) }
-  }, [cajones, cajonProductosMap])
+  }, [cajones, cajonProductosMap, cajonesConDesfase])
 
   // ── Search / highlight ────────────────────────────────────────────────
+  // Devuelve null = no hay filtros activos (mostrar todo sin dimming).
+  // Si hay search o soloDesfases, devuelve el set de cajones que matchea AMBOS
+  // criterios. Los que no están en el set se renderizan atenuados.
   const matchingIds = useMemo(() => {
-    if (!search) return null
+    if (!search && !soloDesfases) return null
     const ids = new Set<string>()
     for (const c of tabCajones) {
-      const prods = cajonProductosMap.get(c.id) ?? []
-      const hay = `${c.codigo} ${prods.map(cp => `${cp.producto.nombre ?? ''} ${cp.producto.sku}`).join(' ')}`
-      if (matchesQuery(search, hay)) ids.add(c.id)
+      if (soloDesfases && !cajonesConDesfase.has(c.id)) continue
+      if (search) {
+        const prods = cajonProductosMap.get(c.id) ?? []
+        const hay = `${c.codigo} ${prods.map(cp => `${cp.producto.nombre ?? ''} ${cp.producto.sku}`).join(' ')}`
+        if (!matchesQuery(search, hay)) continue
+      }
+      ids.add(c.id)
     }
     return ids
-  }, [tabCajones, search, cajonProductosMap])
+  }, [tabCajones, search, soloDesfases, cajonProductosMap, cajonesConDesfase])
 
   // Main search bar — resolves barcode/SKU on Enter
   function handleSearchKey(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -328,7 +392,7 @@ export default function UbicacionesPage() {
   }, [editingId])
 
   function switchTab(t: 'pieza' | 'deposito') {
-    setTab(t); setSearch(''); closeEdit()
+    setTab(t); setSearch(''); setSoloDesfases(false); closeEdit()
   }
 
   // ── Render ─────────────────────────────────────────────────────────────
@@ -364,28 +428,48 @@ export default function UbicacionesPage() {
                     {s.sinContar} sin contar
                   </span>
                 )}
+                {s.desfases > 0 && (
+                  <span className="text-xs bg-red-100 text-red-600 rounded px-1.5 py-0.5 font-medium" title="Cajones con diferencias vs stock Dux">
+                    {s.desfases} desfase{s.desfases === 1 ? '' : 's'}
+                  </span>
+                )}
               </>
             )}
           </button>
         ))}
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-xs">
-        <Input
-          placeholder="Buscar, SKU o escanear código..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          onKeyDown={handleSearchKey}
-          className="pr-7 text-sm"
-        />
-        {search && (
-          <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 text-xs">✕</button>
-        )}
-        {scanMiss && <p className="absolute -bottom-5 left-0 text-xs text-red-500 whitespace-nowrap">Código no encontrado</p>}
-        {search && matchingIds && (
-          <p className="absolute -bottom-5 right-0 text-xs text-zinc-400">{matchingIds.size} coincidencias</p>
-        )}
+      {/* Search + filtros */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative max-w-xs flex-1 min-w-[200px]">
+          <Input
+            placeholder="Buscar, SKU o escanear código..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={handleSearchKey}
+            className="pr-7 text-sm"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 text-xs">✕</button>
+          )}
+          {scanMiss && <p className="absolute -bottom-5 left-0 text-xs text-red-500 whitespace-nowrap">Código no encontrado</p>}
+          {(search || soloDesfases) && matchingIds && (
+            <p className="absolute -bottom-5 right-0 text-xs text-zinc-400">{matchingIds.size} coincidencias</p>
+          )}
+        </div>
+
+        <button
+          onClick={() => setSoloDesfases(v => !v)}
+          disabled={loading || (tab === 'pieza' ? tabStats.pieza.desfases : tabStats.deposito.desfases) === 0}
+          className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+            soloDesfases
+              ? 'bg-red-50 border-red-300 text-red-700 font-medium'
+              : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed'
+          }`}
+          title="Mostrar solo cajones cuyo conteo no coincide con el stock Dux"
+        >
+          {soloDesfases ? '✓ Solo desfases' : 'Solo desfases'}
+        </button>
       </div>
 
       {/* Grid */}
@@ -418,6 +502,10 @@ export default function UbicacionesPage() {
                     const prods = cajonProductosMap.get(c.id) ?? []
                     const ocupado = prods.length > 0
                     const sinContar = prods.some(cp => cp.cantidad === 0)
+                    const desfasesEnCajon = prods.reduce((n, cp) => {
+                      const k = desfaseKind(cp, c.sucursal_id)
+                      return n + (k === 'cajon_mas' || k === 'dux_mas' ? 1 : 0)
+                    }, 0)
                     const isEditing = editingId === c.id
                     const dimmed = !!matchingIds && !matchingIds.has(c.id) && !isEditing
                     const highlighted = !!matchingIds && matchingIds.has(c.id)
@@ -455,6 +543,14 @@ export default function UbicacionesPage() {
                           <div className="flex items-center gap-1 flex-shrink-0">
                             {sinContar && !isEditing && (
                               <span className="w-1.5 h-1.5 rounded-full bg-orange-400" title="Sin contar" />
+                            )}
+                            {desfasesEnCajon > 0 && !isEditing && (
+                              <span
+                                className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 rounded px-1 py-0.5 leading-none"
+                                title={`${desfasesEnCajon} producto(s) con diferencia vs stock Dux`}
+                              >
+                                ⚠ {desfasesEnCajon}
+                              </span>
                             )}
                             {ocupado
                               ? <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 py-0.5 leading-none">{prods.length}</span>
@@ -514,18 +610,37 @@ export default function UbicacionesPage() {
                         {!isEditing && (
                           ocupado
                             ? <ul className="space-y-1">
-                                {prods.map(cp => (
-                                  <li key={cp.id} className="flex items-start justify-between gap-1 min-w-0"
-                                    title={cp.producto.nombre ?? cp.producto.sku}>
-                                    <span className="text-[11px] text-zinc-700 leading-snug line-clamp-2 flex-1">
-                                      {cp.producto.nombre ?? cp.producto.sku}
-                                    </span>
-                                    {cp.cantidad > 0
-                                      ? <span className="text-[10px] text-zinc-400 flex-shrink-0 font-mono mt-0.5">{cp.cantidad}u</span>
-                                      : <span className="text-[10px] text-orange-400 flex-shrink-0 font-medium mt-0.5">—</span>
-                                    }
-                                  </li>
-                                ))}
+                                {prods.map(cp => {
+                                  const dux = duxByKey.get(`${cp.producto_id}:${c.sucursal_id}`)
+                                  const kind = desfaseKind(cp, c.sucursal_id)
+                                  // Color de la cantidad según el cruce con Dux.
+                                  const qtyCls = kind === 'cajon_mas'
+                                    ? 'text-red-600 font-semibold'
+                                    : kind === 'dux_mas'
+                                    ? 'text-amber-600'
+                                    : 'text-zinc-400'
+                                  return (
+                                    <li key={cp.id} className="flex items-start justify-between gap-1 min-w-0"
+                                      title={
+                                        dux
+                                          ? `${cp.producto.nombre ?? cp.producto.sku} · Dux ${dux.stock_dux} (Δ ${dux.diferencia >= 0 ? '+' : ''}${dux.diferencia})`
+                                          : (cp.producto.nombre ?? cp.producto.sku)
+                                      }>
+                                      <span className="text-[11px] text-zinc-700 leading-snug line-clamp-2 flex-1">
+                                        {cp.producto.nombre ?? cp.producto.sku}
+                                      </span>
+                                      <span className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+                                        {cp.cantidad > 0
+                                          ? <span className={`text-[10px] font-mono ${qtyCls}`}>{cp.cantidad}u</span>
+                                          : <span className="text-[10px] text-orange-400 font-medium">—</span>
+                                        }
+                                        {dux && (
+                                          <span className="text-[9px] text-zinc-300 font-mono">/{dux.stock_dux}</span>
+                                        )}
+                                      </span>
+                                    </li>
+                                  )
+                                })}
                               </ul>
                             : <p className="text-[11px] text-zinc-300">—</p>
                         )}
@@ -539,12 +654,27 @@ export default function UbicacionesPage() {
                               <ul className="space-y-1.5">
                                 {prods.map(cp => {
                                   const draftQty = qtyEdits[cp.id] ?? String(cp.cantidad)
+                                  const dux = duxByKey.get(`${cp.producto_id}:${c.sucursal_id}`)
+                                  const kind = desfaseKind(cp, c.sucursal_id)
+                                  const duxCls = kind === 'cajon_mas'
+                                    ? 'text-red-600 bg-red-50 border-red-200'
+                                    : kind === 'dux_mas'
+                                    ? 'text-amber-600 bg-amber-50 border-amber-200'
+                                    : 'text-zinc-400 bg-zinc-50 border-zinc-200'
                                   return (
                                     <li key={cp.id} className="flex items-center gap-1.5 bg-white rounded px-1.5 py-1 border border-zinc-100"
                                       title={cp.producto.nombre ?? cp.producto.sku}>
                                       <span className="flex-1 min-w-0 text-[11px] text-zinc-700 leading-snug line-clamp-2">
                                         {cp.producto.nombre ?? cp.producto.sku}
                                       </span>
+                                      {dux && (
+                                        <span
+                                          className={`text-[9px] font-mono border rounded px-1 py-0.5 leading-none flex-shrink-0 ${duxCls}`}
+                                          title={`Stock Dux en esta sucursal: ${dux.stock_dux} · Cajones (total SKU): ${dux.total_cajones} · Δ ${dux.diferencia >= 0 ? '+' : ''}${dux.diferencia}`}
+                                        >
+                                          Dux {dux.stock_dux}
+                                        </span>
+                                      )}
                                       <div className="flex items-center gap-0.5 flex-shrink-0">
                                         <input
                                           type="number"
