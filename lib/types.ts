@@ -229,3 +229,57 @@ export interface ReposicionItem {
   soho2_deposito: number
   ventas_prom_dia: number
 }
+
+// Used by v_vencimientos_drift — combos donde suma(vencimientos) != stock_dux
+export interface VencimientoDrift {
+  producto_id: string
+  sku: string
+  nombre: string | null
+  categoria: string | null
+  sucursal_id: string
+  sucursal: string
+  stock_dux: number
+  venc_total: number
+  diferencia: number
+  n_lotes_venc: number
+  fecha_venc_mas_antigua: string | null
+  ultimo_sync_lote: string | null
+  ultimo_update_venc: string | null
+  tipo_drift: 'exceso' | 'falta' | 'ok'
+}
+
+// Used by v_vencidos_con_stock — lotes con fecha pasada y cantidad > 0
+export interface VencidoConStock {
+  vencimiento_id: string
+  producto_id: string
+  sku: string
+  nombre: string | null
+  categoria: string | null
+  sucursal_id: string
+  sucursal: string
+  fecha_vencimiento: string
+  cantidad_vencida: number
+  dias_vencido: number
+  stock_dux_actual: number
+  ultimo_update_venc: string | null
+}
+
+// Used by v_vencimientos_movimientos_enriquecida — historial de cambios
+export interface VencimientoMovimiento {
+  id: string
+  vencimiento_id: string | null
+  producto_id: string
+  sku: string
+  nombre: string | null
+  categoria: string | null
+  sucursal_id: string
+  sucursal: string
+  fecha_vencimiento: string | null
+  tipo: 'alta' | 'update' | 'delete'
+  cantidad_anterior: number
+  cantidad_nueva: number
+  delta: number
+  origen: string | null
+  actor: string
+  created_at: string
+}

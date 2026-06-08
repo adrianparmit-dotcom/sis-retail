@@ -249,6 +249,9 @@ export default function VencimientosPage() {
           <Link href="/vencimientos/baja">
             <Button variant="outline" size="sm" className="text-red-600 border-red-200 hover:bg-red-50">Productos a dar de baja</Button>
           </Link>
+          <Link href="/vencimientos/auditoria">
+            <Button variant="outline" size="sm">Auditoría FEFO</Button>
+          </Link>
           <Link href="/recepciones/nueva">
             <Button size="sm">+ Nueva recepción</Button>
           </Link>

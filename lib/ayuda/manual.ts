@@ -87,6 +87,21 @@ nombre.
 # VENCIMIENTOS / BAJA
 Sirve para dar de baja vencimientos (por ejemplo, mercadería vencida que se descarta).
 
+# VENCIMIENTOS / AUDITORÍA FEFO
+Para qué sirve: diagnosticar problemas del FEFO en tiempo real. Tiene 3 solapas:
+- "Drift": productos donde la cantidad cargada en vencimientos no coincide con el stock de
+  Dux. Se separa en dos tipos:
+  - "Sobre-conteo": hay más vencimientos cargados que stock. Suele ser una edición manual
+    posterior a una baja, o un caso raro donde el descuento FEFO no corrió.
+  - "Sin cargar": hay stock en Dux pero no se cargó ninguna fecha de vencimiento todavía.
+- "Vencidos con stock": productos con fecha pasada pero stock > 0 en Dux. Casi siempre es
+  mercadería tirada/regalada por estar vencida que nadie descargó en Dux. Hay que
+  descargarla en Dux para que el FEFO refleje la realidad.
+- "Historial": cada cambio de cada vencimiento (alta, modificación, baja) queda
+  registrado automáticamente. Sirve para investigar cuándo y cómo se modificó algo
+  (ej: por qué un lote viejo apareció con cantidad nueva).
+Cada fila tiene "Historial" para saltar directo a los cambios de ese producto.
+
 # RECEPCIONES
 Lista de las recepciones de mercadería que se fueron haciendo, con su estado.
 Botón "Nueva recepción".
