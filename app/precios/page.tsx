@@ -121,9 +121,8 @@ export default function PreciosPage() {
     setLoading(true)
     const [{ data: rawProds }, { data: pchanges }] = await Promise.all([
       supabase.rpc('productos_con_stock_sucursal', { p_sucursal: sucursal }),
-      supabase.from('price_changes')
-        .select('id,sku,nombre,precio_anterior,precio_nuevo,variacion_pct,detectado_at,visto')
-        .order('detectado_at', { ascending: false }).limit(200),
+      // visto es POR SUCURSAL: cada local acusa por separado qué etiquetas reimprimió
+      supabase.rpc('price_changes_para_sucursal', { p_sucursal: sucursal }),
     ])
     setProductos((rawProds ?? []) as Producto[])
     setCambios((pchanges ?? []) as PriceChange[])
@@ -203,7 +202,7 @@ export default function PreciosPage() {
 
   const marcarTodosVistos = async () => {
     setMarkingVisto(true)
-    await supabase.rpc('marcar_precios_vistos')
+    await supabase.rpc('marcar_precios_vistos', { p_sucursal: sucursal })
     setCambios(prev => prev.map(c => ({ ...c, visto: true })))
     setMarkingVisto(false)
   }
@@ -256,7 +255,7 @@ export default function PreciosPage() {
             {sinVer > 0 && (
               <Badge className="bg-orange-500 text-white px-3 py-1.5 text-sm gap-1.5">
                 <TrendingUp size={13} />
-                {sinVer} aumento{sinVer > 1 ? 's' : ''} sin ver
+                {sinVer} sin ver · {sucursal === 'soho1' ? 'SOHO 1' : 'SOHO 2'}
               </Badge>
             )}
           </div>
@@ -408,7 +407,23 @@ export default function PreciosPage() {
         {tab === 'aumentos' && (
           <>
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <p className="text-sm text-zinc-500">{cambios.length} cambios detectados por el sync de Dux</p>
+              <div className="flex items-center gap-3">
+                {/* Sucursal: el "sin ver" / acuse es por local */}
+                <div className="flex rounded-lg border border-zinc-200 overflow-hidden shrink-0">
+                  {([['soho1','SOHO 1'],['soho2','SOHO 2']] as const).map(([k, l]) => (
+                    <button key={k} onClick={() => setSucursal(k)}
+                      className={`px-4 py-1.5 text-sm font-medium transition-colors ${
+                        sucursal === k ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-600 hover:bg-zinc-50'
+                      }`}>{l}</button>
+                  ))}
+                </div>
+                <p className="text-sm text-zinc-500">
+                  {cambios.length} cambios ·{' '}
+                  {sinVer > 0
+                    ? <span className="font-medium text-orange-600">{sinVer} sin ver en {sucursal === 'soho1' ? 'SOHO 1' : 'SOHO 2'}</span>
+                    : <span className="text-green-600">todo visto en {sucursal === 'soho1' ? 'SOHO 1' : 'SOHO 2'}</span>}
+                </p>
+              </div>
               <div className="flex flex-wrap gap-2 items-center">
                 {cambios.length > 0 && (
                   <>
@@ -441,7 +456,7 @@ export default function PreciosPage() {
                 )}
                 {sinVer > 0 && (
                   <Button variant="outline" size="sm" onClick={marcarTodosVistos} disabled={markingVisto} className="gap-1.5">
-                    <Eye size={14} /> Marcar vistos
+                    <Eye size={14} /> Marcar vistos en {sucursal === 'soho1' ? 'SOHO 1' : 'SOHO 2'}
                   </Button>
                 )}
               </div>
