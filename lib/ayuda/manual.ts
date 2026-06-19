@@ -147,13 +147,19 @@ SOLAPA "ETIQUETAS":
    imprime solo esos. Te dice cuántas hojas son.
 SOLAPA "AUMENTOS":
 Acá aparecen los productos a los que les cambió el precio (los detecta el sync de Dux).
+IMPORTANTE: el "sin ver" es POR SUCURSAL. Arriba elegís SOHO 1 o SOHO 2 y el contador
+("N sin ver en SOHO X") es el de ese local. El precio es el mismo para los dos locales, pero
+cada sucursal lleva su propia cuenta de qué etiquetas ya reimprimió. Así, si SOHO 1 marca sus
+etiquetas, a SOHO 2 NO se le borra el aviso: cada local tiene su lista de pendientes.
 Para imprimir esas etiquetas de forma rápida:
-1. Botón "Seleccionar sin ver" marca de una todos los aumentos nuevos.
+1. Elegís tu sucursal arriba.
+2. Botón "Seleccionar sin ver" marca de una todos los aumentos nuevos de ese local.
    (También está "Todos", "Limpiar" y el casillero del encabezado para marcar/desmarcar todo.)
-2. Botón "Imprimir N etiquetas" imprime las etiquetas de los aumentos seleccionados, con el
+3. Botón "Imprimir N etiquetas" imprime las etiquetas de los aumentos seleccionados, con el
    precio nuevo. No depende del stock.
-3. "Marcar vistos" deja de mostrarlos como nuevos. "Excel" exporta la lista de aumentos.
-Flujo recomendado para muchas etiquetas de aumentos: Aumentos → "Seleccionar sin ver" → "Imprimir".
+4. "Marcar vistos en SOHO X" deja de mostrarlos como nuevos SOLO en ese local. "Excel" exporta
+   la lista de aumentos.
+Flujo recomendado: elegí tu sucursal → "Seleccionar sin ver" → "Imprimir" → "Marcar vistos".
 
 # PROMOCIONES
 Para qué sirve: armar promociones, sobre todo para mover productos que están por vencer o
