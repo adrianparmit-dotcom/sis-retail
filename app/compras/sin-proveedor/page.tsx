@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Input } from '@/components/ui/input'
 import { matchesQuery } from '@/lib/search'
+import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import Link from 'next/link'
 
 interface ProductoSinProveedor {
@@ -27,21 +28,23 @@ export default function SinProveedorPage() {
 
   useEffect(() => {
     async function load() {
-      const [sinRes, provRes] = await Promise.all([
-        supabase
-          .from('productos')
-          .select('id,sku,nombre,categoria,proveedor_nombre')
-          .or('proveedor_nombre.is.null,proveedor_nombre.eq.')
-          .order('categoria', { nullsFirst: false })
-          .order('nombre'),
-        supabase
-          .from('productos')
-          .select('proveedor_nombre')
-          .not('proveedor_nombre', 'is', null)
-          .neq('proveedor_nombre', ''),
+      // productos tiene >3000 filas: leer con fetchAllFromView (PostgREST corta en 1000)
+      const [sinProv, provRows] = await Promise.all([
+        fetchAllFromView<ProductoSinProveedor>('productos', {
+          select: 'id,sku,nombre,categoria,proveedor_nombre',
+          filters: [{ column: '', operator: 'or', value: 'proveedor_nombre.is.null,proveedor_nombre.eq.' }],
+          order: [{ column: 'categoria', nullsFirst: false }, { column: 'nombre' }],
+        }),
+        fetchAllFromView<{ proveedor_nombre: string | null }>('productos', {
+          select: 'proveedor_nombre',
+          filters: [
+            { column: 'proveedor_nombre', operator: 'not.is', value: null },
+            { column: 'proveedor_nombre', operator: 'neq', value: '' },
+          ],
+        }),
       ])
-      setProductos((sinRes.data ?? []) as ProductoSinProveedor[])
-      const nombres = [...new Set((provRes.data ?? []).map((r: { proveedor_nombre: string | null }) => r.proveedor_nombre).filter(Boolean) as string[])].sort()
+      setProductos(sinProv)
+      const nombres = [...new Set(provRows.map(r => r.proveedor_nombre).filter(Boolean) as string[])].sort()
       setProveedoresExistentes(nombres)
       setLoading(false)
     }

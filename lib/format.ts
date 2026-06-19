@@ -1,11 +1,11 @@
-/** Format a number as Argentine pesos */
-export function formatPesos(value: number): string {
-  return new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value)
+/**
+ * Hoy en formato YYYY-MM-DD usando la zona horaria LOCAL.
+ * No usar `new Date().toISOString().split('T')[0]` para "hoy": eso devuelve la
+ * fecha UTC, que en Argentina (UTC-3) ya es "mañana" a partir de las 21:00.
+ */
+export function hoyISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /** Format a number with thousands separator */
@@ -31,21 +31,3 @@ export function formatDateTime(iso: string | null | undefined): string {
     ' ' + d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
 }
 
-/** Format days of coverage */
-export function formatDias(dias: number | null | undefined): string {
-  if (dias === null || dias === undefined) return '—'
-  if (dias > 365) return '+1 año'
-  if (dias > 90) return `${Math.round(dias / 30)}m`
-  return `${Math.round(dias)}d`
-}
-
-/** Format a percentage */
-export function formatPct(value: number, decimals = 1): string {
-  return `${value.toFixed(decimals)}%`
-}
-
-/** Truncate a string to maxLen chars */
-export function truncate(str: string | null | undefined, maxLen = 40): string {
-  if (!str) return ''
-  return str.length > maxLen ? str.slice(0, maxLen) + '…' : str
-}

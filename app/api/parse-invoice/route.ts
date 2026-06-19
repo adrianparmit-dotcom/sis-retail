@@ -126,7 +126,10 @@ export async function POST(req: NextRequest) {
       }],
     })
 
-    const raw     = (message.content[0] as { type: string; text: string }).text
+    const raw = message.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('\n')
     const jsonStr = extractJson(raw)
 
     let data: unknown

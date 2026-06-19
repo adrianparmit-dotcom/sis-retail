@@ -132,19 +132,19 @@ export default function ReposicionPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [syncRes, barcodesRes, reposData] = await Promise.all([
+        // productos tiene >3000 filas: sin paginar, el mapa de códigos de barras quedaba incompleto
+        const [syncRes, barcodes, reposData] = await Promise.all([
           supabase.from('productos').select('dux_sync_at').not('dux_sync_at', 'is', null).limit(1),
-          supabase.from('productos').select('sku,codigo_barras'),
+          fetchAllFromView<{ sku: string; codigo_barras: string | null }>('productos', {
+            select: 'sku,codigo_barras',
+            filters: [{ column: 'codigo_barras', operator: 'not.is', value: null }],
+          }),
           fetchAllFromView<ReposicionItem>('v_reposicion_dashboard'),
         ])
         setSyncedOnce(syncRes.data != null && syncRes.data.length > 0)
-        if (barcodesRes.data) {
-          setBarcodeMap(new Map(
-            (barcodesRes.data as { sku: string; codigo_barras: string | null }[])
-              .filter(p => p.codigo_barras)
-              .map(p => [p.codigo_barras!, p.sku])
-          ))
-        }
+        setBarcodeMap(new Map(
+          barcodes.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p.sku])
+        ))
         setData(reposData)
       } finally {
         setLoading(false)

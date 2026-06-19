@@ -21,8 +21,8 @@ import {
   X, Settings2, Info, TrendingDown, Bell, ShoppingCart, PackageX, RefreshCw, Search,
 } from 'lucide-react'
 import Link from 'next/link'
-import { exportOrdenCSV, exportOrdenPDF } from '@/lib/export-orden'
 import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
+import { OrdenEditorModal, type ProductoCatalogo, type ProveedorConfigHeader } from '@/components/shared/orden-editor-modal'
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@/components/ui/tooltip'
@@ -242,8 +242,10 @@ export default function ComprasPage() {
   const [scanHighlight, setScanHighlight] = useState<string | null>(null)
   const [scanMiss, setScanMiss] = useState(false)
   const [alertasHoy, setAlertasHoy] = useState<string[]>([])
-  const [exportingPDF, setExportingPDF] = useState(false)
   const [abcMap, setAbcMap] = useState<Map<string, 'A' | 'B' | 'C'>>(new Map())
+  const [proveedoresConfig, setProveedoresConfig] = useState<ProveedorConfigHeader[]>([])
+  const [productosCatalogo, setProductosCatalogo] = useState<ProductoCatalogo[]>([])
+  const [ordenOpen, setOrdenOpen] = useState(false)
 
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const missTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -292,11 +294,6 @@ export default function ComprasPage() {
 
   const entregaFiltro = sucursal === 'soho1' ? 'SOHO 1' : sucursal === 'soho2' ? 'SOHO 2' : null
 
-  async function handleExportPDF() {
-    setExportingPDF(true)
-    try { await exportOrdenPDF(filtered, entregaFiltro) } finally { setExportingPDF(false) }
-  }
-
   function handleExportExcel() {
     const cols: ColumnaExport<ProductoCompra>[] = [
       { header: 'SKU',            value: p => p.sku },
@@ -323,11 +320,20 @@ export default function ComprasPage() {
 
     const load = async () => {
       try {
-        const [alertasRes, syncRes, barcodesRes, abcRes, comprasData] = await Promise.all([
+        // productos tiene >3000 filas: leer SIEMPRE con fetchAllFromView (PostgREST corta en 1000)
+        const [alertasRes, syncRes, catalogoData, abcData, provConfigRes, comprasData] = await Promise.all([
           supabase.from('proveedores_config').select('nombre, dia_pedido').eq('dia_pedido', todayIso),
           supabase.from('productos').select('dux_sync_at').not('dux_sync_at', 'is', null).limit(1),
-          supabase.from('productos').select('sku,codigo_barras'),
-          supabase.from('productos').select('id,clasificacion_abc').not('clasificacion_abc', 'is', null),
+          fetchAllFromView<{
+            id: string; sku: string; nombre: string | null; categoria: string | null
+            codigo_barras: string | null; stock_dux: number | null
+            costo: number | null; iva_porcentaje: number | null; unidad_medida: string | null
+          }>('productos', { select: 'id,sku,nombre,categoria,codigo_barras,stock_dux,costo,iva_porcentaje,unidad_medida' }),
+          fetchAllFromView<{ id: string; clasificacion_abc: 'A' | 'B' | 'C' }>('productos', {
+            select: 'id,clasificacion_abc',
+            filters: [{ column: 'clasificacion_abc', operator: 'not.is', value: null }],
+          }),
+          supabase.from('proveedores_config').select('nombre,cuit,direccion,telefono,localidad,provincia,iva_condicion,condicion_pago,condiciones_entrega'),
           fetchAllFromView<ProductoCompra>('v_compras_inteligentes_v4'),
         ])
         if (alertasRes.data && alertasRes.data.length > 0) {
@@ -338,18 +344,23 @@ export default function ComprasPage() {
             ? (syncRes.data[0] as { dux_sync_at: string }).dux_sync_at
             : null
         )
-        if (barcodesRes.data) {
-          setBarcodeMap(new Map(
-            (barcodesRes.data as { sku: string; codigo_barras: string | null }[])
-              .filter(p => p.codigo_barras)
-              .map(p => [p.codigo_barras!, p.sku])
-          ))
-        }
-        if (abcRes.data) {
-          setAbcMap(new Map(
-            (abcRes.data as { id: string; clasificacion_abc: 'A' | 'B' | 'C' }[])
-              .map(p => [p.id, p.clasificacion_abc])
-          ))
+        setBarcodeMap(new Map(
+          catalogoData.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p.sku])
+        ))
+        setProductosCatalogo(catalogoData.map<ProductoCatalogo>(p => ({
+          id: p.id,
+          sku: p.sku,
+          nombre: p.nombre,
+          categoria: p.categoria,
+          codigo_barras: p.codigo_barras,
+          stock_dux: p.stock_dux ?? 0,
+          costo: p.costo,
+          iva_porcentaje: p.iva_porcentaje,
+          es_granel: p.unidad_medida === 'kg',
+        })))
+        setAbcMap(new Map(abcData.map(p => [p.id, p.clasificacion_abc])))
+        if (provConfigRes.data) {
+          setProveedoresConfig(provConfigRes.data as ProveedorConfigHeader[])
         }
         setData(comprasData)
       } finally {
@@ -586,15 +597,10 @@ export default function ComprasPage() {
             <Download size={14} />
             Excel
           </Button>
-          <Button variant="outline" size="sm" className="flex items-center gap-1.5"
-            onClick={() => exportOrdenCSV(filtered, entregaFiltro)} disabled={filtered.length === 0 || loading}>
-            <Download size={14} />
-            CSV
-          </Button>
-          <Button variant="outline" size="sm" className="flex items-center gap-1.5"
-            onClick={handleExportPDF} disabled={filtered.length === 0 || exportingPDF || loading}>
+          <Button size="sm" className="flex items-center gap-1.5"
+            onClick={() => setOrdenOpen(true)} disabled={filtered.length === 0 || loading}>
             <FileText size={14} />
-            {exportingPDF ? 'Generando...' : 'PDF'}
+            Generar orden
           </Button>
         </div>
       </div>
@@ -645,8 +651,8 @@ export default function ComprasPage() {
                       </TooltipTrigger>
                       <TooltipContent side="left" className="max-w-xs text-xs">
                         <p className="font-semibold mb-1">Comprador Inteligente</p>
-                        <p>Demanda = 70% mes anterior + 30% mismo mes año anterior</p>
-                        <p className="mt-1">+ 10% stock de seguridad · limitado por vencimiento · MOQ · múltiplo</p>
+                        <p>Demanda = 50% últimos 30d + 30% días 30-60 + 20% mismo mes año anterior</p>
+                        <p className="mt-1">+ stock de seguridad por lead time · limitado por vencimiento · MOQ · múltiplo</p>
                         <p className="mt-1 text-zinc-400">⚡ = quiebre detectado (demanda ajustada)</p>
                       </TooltipContent>
                     </Tooltip>
@@ -780,6 +786,15 @@ export default function ComprasPage() {
       {!loading && total > pageSize && (
         <Pagination page={page} pageSize={pageSize} total={total} onPage={setPage} />
       )}
+
+      <OrdenEditorModal
+        open={ordenOpen}
+        rows={filtered}
+        entregaDefault={entregaFiltro}
+        proveedoresConfig={proveedoresConfig}
+        productosCatalogo={productosCatalogo}
+        onClose={() => setOrdenOpen(false)}
+      />
 
     </div>
     </TooltipProvider>

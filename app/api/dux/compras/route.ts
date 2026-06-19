@@ -24,16 +24,7 @@ export const maxDuration = 60
 
 const DUX_BASE    = 'https://erp.duxsoftware.com.ar/WSERP/rest/services'
 const DUX_TOKEN   = process.env.DUX_API_TOKEN ?? ''
-const ID_EMPRESA  = parseInt(process.env.DUX_ID_EMPRESA ?? '4065')
 const ID_PERSONAL = parseInt(process.env.DUX_ID_PERSONAL ?? '1')
-
-// Dux deposit IDs per SOHO sucursal
-export const DUX_DEPOSITO_MAP: Record<string, number> = {
-  'a0000000-0000-0000-0000-000000000001': 7951,   // SOHO 1 - Local
-  'a0000000-0000-0000-0000-000000000002': 8545,   // SOHO 1 - La Pieza
-  'a0000000-0000-0000-0000-000000000003': 15289,  // SOHO 2 - Local
-  'a0000000-0000-0000-0000-000000000004': 15513,  // SOHO 2 - Depósito
-}
 
 export async function POST(req: NextRequest) {
   if (!DUX_TOKEN) {
@@ -48,14 +39,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Merge server-side constants.
-  // id_empresa: only include if the env var is set to a valid value (not the 4065 default).
-  //   In Dux v2, if the token uniquely identifies the empresa, omitting id_empresa is fine.
-  //   Set DUX_ID_EMPRESA in Vercel env vars with the correct empresa ID from Dux.
+  // id_empresa: DUX_ID_EMPRESA en Vercel; default 4065 = SHUK SRL.
   // id_personal: must match the employee linked to the API token.
   const { productos, skip_empresa: _skip, ...rest } = body as {
     productos?: unknown; skip_empresa?: unknown; [k: string]: unknown
   }
-  const duxIdEmpresa = parseInt(process.env.DUX_ID_EMPRESA || '4065')  // SHUK SRL = 4065
+  const duxIdEmpresa = parseInt(process.env.DUX_ID_EMPRESA || '4065')
   const payload: Record<string, unknown> = {
     id_empresa : duxIdEmpresa,
     ...(ID_PERSONAL ? { id_personal: ID_PERSONAL } : {}),

@@ -58,9 +58,6 @@ export interface Vencimiento {
   estado: 'vencido' | 'critico' | 'alerta' | 'proximo' | 'ok' | 'sin_fecha'
 }
 
-// Keep old name as alias for backward compat in compras page
-export type LoteVencimiento = Vencimiento & { numero_lote: string; deposito: string | null }
-
 export interface ProductoStock {
   id: string
   sku: string

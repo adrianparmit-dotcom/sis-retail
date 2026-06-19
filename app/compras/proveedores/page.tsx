@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, Save, Plus, Info, RefreshCw, Link2, AlertCircle } from 'lucide-react'
 import { matchesQuery } from '@/lib/search'
+import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import Link from 'next/link'
 
 interface ProveedorConfig {
@@ -63,18 +64,20 @@ export default function ProveedoresConfigPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true)
-    const [configRes, prodRes, sinConfigRes] = await Promise.all([
+    // productos tiene >3000 filas: sin paginar, la lista de proveedores quedaba incompleta
+    const [configRes, prodRows, sinConfigRes] = await Promise.all([
       supabase.from('proveedores_config').select('*').order('nombre'),
-      supabase.from('productos').select('proveedor_nombre').not('proveedor_nombre', 'is', null),
+      fetchAllFromView<{ proveedor_nombre: string | null }>('productos', {
+        select: 'proveedor_nombre',
+        filters: [{ column: 'proveedor_nombre', operator: 'not.is', value: null }],
+      }),
       supabase.from('v_proveedores_sin_config').select('proveedor_nombre'),
     ])
     const cfgs = (configRes.data ?? []) as ProveedorConfig[]
     setConfigs(cfgs)
 
     const allNombres = [...new Set(
-      (prodRes.data ?? [])
-        .map((p: { proveedor_nombre: string | null }) => p.proveedor_nombre)
-        .filter(Boolean) as string[]
+      prodRows.map(p => p.proveedor_nombre).filter(Boolean) as string[]
     )].sort((a, b) => a.localeCompare(b, 'es'))
     setNombres(allNombres)
 

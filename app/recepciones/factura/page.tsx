@@ -23,6 +23,9 @@ import { parseFactura, calcPrecioVenta, detectProveedorType } from '@/lib/invoic
 import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorToPDF, type DocumentoProveedor } from '@/lib/proveedor-doc'
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
+import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
+import { hoyISO } from '@/lib/format'
+import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { normalizeText } from '@/lib/search'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -32,14 +35,9 @@ import { CheckCircle2, HelpCircle, Download, Loader2, ChevronRight, Save, Users,
 
 // ── Constants ────────────────────────────────────────────────────
 
-const SUCURSALES = [
-  // dux_sucursal_id = Dux logical branch ID (1=SOHO1, 3=SOHO2) used in v2/compras
-  // dux_deposito    = Dux warehouse ID used as id_deposito in v2/compras
-  { id: 'a0000000-0000-0000-0000-000000000001', nombre: 'SOHO 1 - Local',    dux_deposito: 7951,  dux_sucursal: 7951,  dux_sucursal_id: 1 },
-  { id: 'a0000000-0000-0000-0000-000000000002', nombre: 'SOHO 1 - La Pieza', dux_deposito: 8545,  dux_sucursal: 7951,  dux_sucursal_id: 1 },
-  { id: 'a0000000-0000-0000-0000-000000000003', nombre: 'SOHO 2 - Local',    dux_deposito: 15289, dux_sucursal: 15289, dux_sucursal_id: 3 },
-  { id: 'a0000000-0000-0000-0000-000000000004', nombre: 'SOHO 2 - Depósito', dux_deposito: 15513, dux_sucursal: 15289, dux_sucursal_id: 3 },
-]
+const SUCURSALES = SUCURSALES_DUX
+const esSoho2 = (sucId: string) =>
+  sucId === SUCS.SOHO2_LOCAL || sucId === SUCS.SOHO2_DEPOSITO
 
 const PROVEEDOR_LABELS: Record<ProveedorType | 'auto', string> = {
   auto : 'Auto-detectar',
@@ -680,14 +678,17 @@ export default function RecepcionFacturaPage() {
   useEffect(() => {
     async function load() {
       setLoadingProds(true)
-      const [prodRes, skuRes] = await Promise.all([
-        supabase.from('productos')
-          .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria')
-          .order('nombre'),
-        supabase.from('proveedor_sku_map').select('*'),
+      // productos tiene >3000 filas: sin paginar, el matching por sku_map fallaba
+      // en silencio para todo producto fuera de las primeras 1000 filas.
+      const [prods, mapRows] = await Promise.all([
+        fetchAllFromView<Producto>('productos', {
+          select: 'id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria',
+          order: { column: 'nombre' },
+        }),
+        fetchAllFromView<SkuMapEntry>('proveedor_sku_map'),
       ])
-      setProductos((prodRes.data ?? []) as Producto[])
-      setSkuMap((skuRes.data ?? []) as SkuMapEntry[])
+      setProductos(prods)
+      setSkuMap(mapRows)
       setLoadingProds(false)
     }
     load()
@@ -922,13 +923,13 @@ export default function RecepcionFacturaPage() {
   ): Promise<{ recId: string | null; items: InvoiceLineItem[] }> {
     const fechaISO = parsed.fecha
       ? parsed.fecha.split('/').reverse().join('-')
-      : new Date().toISOString().split('T')[0]
+      : hoyISO()
     const { data: recRow, error: recErr } = await supabase.from('recepciones').insert({
       numero_comprobante : parsed.nro_comprobante || null,
       dux_compra_id      : parsed.nro_comprobante || null,
       proveedor_nombre   : parsed.proveedor_nombre || null,
       fecha_factura      : fechaISO,
-      fecha_recepcion    : new Date().toISOString().split('T')[0],
+      fecha_recepcion    : hoyISO(),
       estado             : 'borrador',
       sucursal_id        : sucursalId,
       texto_original     : textoOrig,
@@ -1040,7 +1041,7 @@ export default function RecepcionFacturaPage() {
         const exp = merged.cantidad
         const fv  = merged.fecha_vencimiento
         let estado = merged.estado_recepcion
-        if (fv && fv < new Date().toISOString().split('T')[0]) estado = 'vencido_llegada'
+        if (fv && fv < hoyISO()) estado = 'vencido_llegada'
         else if (qty < exp) estado = 'faltante'
         else if (qty > exp) estado = 'extra'
         else estado = 'ok'
@@ -1243,7 +1244,7 @@ export default function RecepcionFacturaPage() {
       const sucursal = SUCURSALES.find(s => s.id === sucursalId)!
       const fechaISO = factura.fecha
         ? factura.fecha.split('/').reverse().join('-')
-        : new Date().toISOString().split('T')[0]
+        : hoyISO()
 
       // Compute totals inline (mirrors `stats` but kept local to avoid stale-closure issues)
       const totalNeto  = items.reduce((s, i) => s + i.costo_unitario * i.cantidad, 0)
@@ -1267,7 +1268,7 @@ export default function RecepcionFacturaPage() {
       await supabase.from('recepciones').update({
         estado          : 'confirmada',
         sucursal_id     : sucursalId,
-        fecha_recepcion : new Date().toISOString().split('T')[0],
+        fecha_recepcion : hoyISO(),
         total_neto      : totalNeto,
         total_iva       : totalIva,
         total_factura   : totalFinal,
@@ -1349,7 +1350,7 @@ export default function RecepcionFacturaPage() {
         const { data: transf } = await supabase.from('transferencias_recepcion').insert({
           recepcion_id        : recId,
           sucursal_origen_id  : sucursalId,
-          sucursal_destino_id : 'a0000000-0000-0000-0000-000000000002', // SOHO 1 - La Pieza
+          sucursal_destino_id : SUCS.SOHO1_PIEZA,
           estado              : 'pendiente',
         }).select('id').single()
         const transfId = (transf as { id: string } | null)?.id ?? null
@@ -1750,7 +1751,7 @@ export default function RecepcionFacturaPage() {
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500">Producto sistema</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-14">Fact.</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-20">Recibido</th>
-                  {(sucursalId === 'a0000000-0000-0000-0000-000000000003' || sucursalId === 'a0000000-0000-0000-0000-000000000004') && (
+                  {esSoho2(sucursalId) && (
                     <th className="text-right px-2 py-2 text-xs font-medium text-indigo-500 w-16" title="Unidades a transferir a SOHO 1">→ S1</th>
                   )}
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-22">Costo</th>
@@ -1861,7 +1862,7 @@ export default function RecepcionFacturaPage() {
                       </td>
 
                       {/* Transfer to S1 — only visible when receiving at SOHO 2 */}
-                      {(sucursalId === 'a0000000-0000-0000-0000-000000000003' || sucursalId === 'a0000000-0000-0000-0000-000000000004') && (
+                      {esSoho2(sucursalId) && (
                         <td className="px-2 py-2 text-right">
                           {item.producto_id && !item.es_granel ? (
                             <input
@@ -2111,7 +2112,7 @@ export default function RecepcionFacturaPage() {
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-semibold text-amber-800 mb-1">💰 {priceExcelCount} precios para actualizar en Dux</p>
             <p className="text-xs text-amber-700 mb-3">Dux → Configuración → Artículos → Actualización masiva de precios → subí este archivo</p>
-            <a href={priceExcelUrl} download={`dux_precios_${new Date().toISOString().split('T')[0]}.xlsx`}>
+            <a href={priceExcelUrl} download={`dux_precios_${hoyISO()}.xlsx`}>
               <Button size="sm" className="flex items-center gap-2">
                 <Download size={14} />Descargar Excel de precios
               </Button>

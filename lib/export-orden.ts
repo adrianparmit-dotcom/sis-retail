@@ -1,6 +1,38 @@
 import type { ProductoCompra } from './types'
 
 // ─────────────────────────────────────────────────────
+// Public types — usados por el editor de orden y los exports
+// ─────────────────────────────────────────────────────
+
+export interface OrdenItemEditado {
+  sku            : string
+  nombre         : string
+  cantidad       : number   // En kg si es_granel; en unidades si no
+  costo          : number   // Por unidad (o por kg si es_granel)
+  iva_porcentaje : number
+  es_granel      : boolean
+}
+
+export interface OrdenHeader {
+  cuit               : string
+  direccion          : string
+  telefono           : string
+  localidad          : string
+  provincia          : string
+  iva_condicion      : string
+  condicion_pago     : string
+  condiciones_entrega: string
+  fecha_entrega      : string
+}
+
+export interface OrdenGrupoEditado {
+  proveedor : string
+  sucursal  : string | null   // Lugar de entrega cuando el proveedor es por-sucursal
+  header    : OrdenHeader
+  items     : OrdenItemEditado[]
+}
+
+// ─────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────
 
@@ -19,29 +51,27 @@ function sugerenciaEfectiva(p: ProductoCompra): number {
   return 0
 }
 
-function unidadMedida(p: ProductoCompra): string {
-  if (p.es_granel) return 'KG'
-  return 'UNIDAD'
+function unidadMedida(item: { es_granel: boolean }): string {
+  return item.es_granel ? 'KG' : 'UNIDAD'
 }
 
-function calcIVA(p: ProductoCompra, cant: number): number {
-  if (!p.costo || !p.iva_porcentaje) return 0
-  const subtotal = cant * p.costo
-  return Math.round(subtotal * (p.iva_porcentaje / 100) * 100) / 100
+function calcIVA(item: OrdenItemEditado): number {
+  const subtotal = item.cantidad * item.costo
+  return Math.round(subtotal * (item.iva_porcentaje / 100) * 100) / 100
 }
 
 // One order block per (provider, sucursal). For global providers `sucursal` is
 // null and there's a single block; for per-sucursal providers (e.g. Karen
 // Previotto) the view returns 2 rows per SKU, so we split into "SOHO 1" /
 // "SOHO 2" blocks — each gets delivered to its own store.
-interface OrdenGrupo {
+interface OrdenGrupoCrudo {
   proveedor: string
   sucursal: string | null
   items: ProductoCompra[]
 }
 
-function groupForOrden(rows: ProductoCompra[]): OrdenGrupo[] {
-  const map = new Map<string, OrdenGrupo>()
+function groupForOrden(rows: ProductoCompra[]): OrdenGrupoCrudo[] {
+  const map = new Map<string, OrdenGrupoCrudo>()
   const sorted = [...rows].sort((a, b) => {
     const pa = a.proveedor_nombre ?? 'ZZZ'
     const pb = b.proveedor_nombre ?? 'ZZZ'
@@ -61,6 +91,41 @@ function groupForOrden(rows: ProductoCompra[]): OrdenGrupo[] {
   return [...map.values()]
 }
 
+export function emptyHeader(): OrdenHeader {
+  return {
+    cuit: '',
+    direccion: '',
+    telefono: '',
+    localidad: '',
+    provincia: '',
+    iva_condicion: 'RESPONSABLE INSCRIPTO',
+    condicion_pago: '',
+    condiciones_entrega: '',
+    fecha_entrega: '',
+  }
+}
+
+/**
+ * Construye los grupos editables desde las filas crudas de la vista de compras.
+ * El editor llama a esto al abrir; luego el usuario ajusta cantidades, agrega/quita
+ * productos y completa el header antes de exportar.
+ */
+export function buildGruposFromRows(rows: ProductoCompra[]): OrdenGrupoEditado[] {
+  return groupForOrden(rows).map(g => ({
+    proveedor: g.proveedor,
+    sucursal: g.sucursal,
+    header: emptyHeader(),
+    items: g.items.map<OrdenItemEditado>(p => ({
+      sku: p.sku,
+      nombre: p.nombre ?? '',
+      cantidad: sugerenciaEfectiva(p),
+      costo: p.costo ?? 0,
+      iva_porcentaje: p.iva_porcentaje ?? 0,
+      es_granel: p.es_granel,
+    })),
+  }))
+}
+
 // ─────────────────────────────────────────────────────
 // CSV Export — Orden de Compra format
 // ─────────────────────────────────────────────────────
@@ -71,23 +136,33 @@ function esc(val: string | number): string {
   return s
 }
 
-// `entregaDefault` is the sucursal selected in the page filter ('SOHO 1' /
-// 'SOHO 2' / null). It sets the delivery location for global-provider blocks
-// (which have no sucursal of their own) so a "SOHO 2" order says SOHO 2.
-export function exportOrdenCSV(rows: ProductoCompra[], entregaDefault: string | null = null) {
-  const groups = groupForOrden(rows)
+export function exportOrdenCSVFromGrupos(grupos: OrdenGrupoEditado[], entregaDefault: string | null = null) {
   const fecha = todayStr()
   const lines: string[] = ['sep=;']
 
   lines.push(esc('ORDEN DE COMPRA — SOHO') + ';' + esc(`FECHA: ${fecha}`) + ';' + ';'.repeat(7))
   lines.push(';'.repeat(9))
 
-  for (const { proveedor, sucursal, items } of groups) {
-    // Per-store providers carry their own sucursal; for global ones fall back
-    // to the active page filter.
+  for (const { proveedor, sucursal, header, items } of grupos) {
+    const visibles = items.filter(i => i.cantidad > 0)
+    if (visibles.length === 0) continue
+
     const lugar = sucursal ?? entregaDefault
     const titulo = lugar ? `PROVEEDOR: ${proveedor} — ${lugar}` : `PROVEEDOR: ${proveedor}`
     lines.push(esc(titulo) + ';' + ';'.repeat(8))
+
+    // Datos del proveedor (solo si hay algo cargado)
+    const headerLines: string[] = []
+    if (header.cuit)                headerLines.push(`CUIT: ${header.cuit}`)
+    if (header.direccion)           headerLines.push(`DIRECCIÓN: ${header.direccion}`)
+    if (header.telefono)            headerLines.push(`TELÉFONO: ${header.telefono}`)
+    if (header.localidad)           headerLines.push(`LOCALIDAD: ${header.localidad}`)
+    if (header.provincia)           headerLines.push(`PROVINCIA: ${header.provincia}`)
+    if (header.iva_condicion)       headerLines.push(`IVA: ${header.iva_condicion}`)
+    if (header.condicion_pago)      headerLines.push(`COND. PAGO: ${header.condicion_pago}`)
+    if (header.fecha_entrega)       headerLines.push(`FECHA ENTREGA: ${header.fecha_entrega}`)
+    if (header.condiciones_entrega) headerLines.push(`COND. ENTREGA: ${header.condiciones_entrega}`)
+    for (const h of headerLines) lines.push(esc(h) + ';' + ';'.repeat(8))
     lines.push('')
 
     // Column headers
@@ -97,21 +172,19 @@ export function exportOrdenCSV(rows: ProductoCompra[], entregaDefault: string | 
     let subtotal = 0
     let totalIVA = 0
 
-    for (const p of items) {
-      const cant = sugerenciaEfectiva(p)
-      const precioUnit = p.costo ?? 0
-      const sub = cant * precioUnit
-      const iva = calcIVA(p, cant)
+    for (const item of visibles) {
+      const sub = item.cantidad * item.costo
+      const iva = calcIVA(item)
       const subConIVA = sub + iva
       subtotal += sub
       totalIVA += iva
 
       lines.push([
-        p.sku,
-        p.nombre ?? '',
-        cant,
-        unidadMedida(p),
-        precioUnit.toFixed(2),
+        item.sku,
+        item.nombre,
+        item.cantidad,
+        unidadMedida(item),
+        item.costo.toFixed(2),
         '0',
         sub.toFixed(2),
         iva.toFixed(2),
@@ -143,21 +216,20 @@ export function exportOrdenCSV(rows: ProductoCompra[], entregaDefault: string | 
 // PDF Export — Orden de Compra per provider
 // ─────────────────────────────────────────────────────
 
-export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: string | null = null) {
+export async function exportOrdenPDFFromGrupos(grupos: OrdenGrupoEditado[], entregaDefault: string | null = null) {
   // Dynamic import so the 300KB bundle only loads when clicked
   const { jsPDF } = await import('jspdf')
   const autoTable = (await import('jspdf-autotable')).default
 
-  const groups = groupForOrden(rows)
   const fecha = todayStr()
-
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   let firstPage = true
 
-  for (const { proveedor, sucursal, items } of groups) {
+  for (const { proveedor, sucursal, header, items } of grupos) {
+    const visibles = items.filter(i => i.cantidad > 0)
+    if (visibles.length === 0) continue
+
     if (!firstPage) doc.addPage()
-    // Per-store providers deliver to their own sucursal; global providers use
-    // the active page filter (or SOHO 1 when no filter is set).
     const lugarEntrega = sucursal ?? entregaDefault ?? 'SOHO 1'
     firstPage = false
 
@@ -167,7 +239,6 @@ export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: str
     doc.setFillColor(245, 245, 245)
     doc.rect(0, 0, pageW, 28, 'F')
 
-    // Left: company name
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(16)
     doc.setTextColor(30, 30, 30)
@@ -179,7 +250,6 @@ export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: str
     doc.text('SHUK SRL', 14, 18)
     doc.text('NATURAL CENTER', 14, 22)
 
-    // Center: "X" box (comprobante type)
     doc.setDrawColor(180)
     doc.setLineWidth(0.5)
     doc.rect(pageW / 2 - 8, 4, 16, 16)
@@ -188,7 +258,6 @@ export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: str
     doc.setTextColor(30)
     doc.text('X', pageW / 2, 14, { align: 'center' })
 
-    // Right: title + N° + fecha
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(14)
     doc.setTextColor(20)
@@ -207,21 +276,21 @@ export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: str
     const rightX = pageW / 2 + 4
     const lineH = 6
 
-    const infoLeft = [
+    const infoLeft: [string, string][] = [
       ['PROVEEDOR:', proveedor],
-      ['DIRECCIÓN:', ''],
-      ['TELÉFONO:', ''],
+      ['DIRECCIÓN:', header.direccion],
+      ['TELÉFONO:', header.telefono],
       ['MONEDA:', 'PESOS'],
-      ['FECHA ENTREGA:', ''],
+      ['FECHA ENTREGA:', header.fecha_entrega],
       ['LUGAR ENTREGA:', lugarEntrega],
     ]
-    const infoRight = [
-      ['IVA:', 'RESPONSABLE INSCRIPTO'],
-      ['CUIT:', ''],
-      ['LOCALIDAD:', ''],
-      ['PROVINCIA:', ''],
-      ['CONDICIÓN PAGO:', ''],
-      ['CONDICIONES ENTREGA:', ''],
+    const infoRight: [string, string][] = [
+      ['IVA:', header.iva_condicion],
+      ['CUIT:', header.cuit],
+      ['LOCALIDAD:', header.localidad],
+      ['PROVINCIA:', header.provincia],
+      ['CONDICIÓN PAGO:', header.condicion_pago],
+      ['CONDICIONES ENTREGA:', header.condiciones_entrega],
     ]
 
     doc.setFontSize(8)
@@ -248,24 +317,22 @@ export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: str
     let subtotal = 0
     let totalIVA = 0
 
-    const tableRows = items.map(p => {
-      const cant = sugerenciaEfectiva(p)
-      const precioUnit = p.costo ?? 0
-      const sub = cant * precioUnit
-      const iva = calcIVA(p, cant)
+    const tableRows = visibles.map(item => {
+      const sub = item.cantidad * item.costo
+      const iva = calcIVA(item)
       const subConIVA = sub + iva
       subtotal += sub
       totalIVA += iva
 
       return [
-        p.sku,
-        p.nombre ?? '',
-        String(cant),
-        unidadMedida(p),
-        `$${precioUnit.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
+        item.sku,
+        item.nombre,
+        String(item.cantidad),
+        unidadMedida(item),
+        `$${item.costo.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
         '0',
         `$${sub.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
-        String(p.iva_porcentaje ?? 0),
+        String(item.iva_porcentaje),
         `$${subConIVA.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
       ]
     })
@@ -278,18 +345,17 @@ export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: str
       styles: { fontSize: 8, cellPadding: 2, textColor: [30, 30, 30] },
       headStyles: { fillColor: [240, 240, 240], textColor: [30, 30, 30], fontStyle: 'bold', halign: 'center' },
       columnStyles: {
-        0: { cellWidth: 18, halign: 'center' },  // Código
-        1: { cellWidth: 'auto' },                 // Descripción
-        2: { cellWidth: 14, halign: 'center' },   // Cant.
-        3: { cellWidth: 18, halign: 'center' },   // Unidad
-        4: { cellWidth: 24, halign: 'right' },    // Precio unit
-        5: { cellWidth: 12, halign: 'center' },   // % desc
-        6: { cellWidth: 24, halign: 'right' },    // Subtotal
-        7: { cellWidth: 12, halign: 'center' },   // IVA
-        8: { cellWidth: 24, halign: 'right' },    // Subt c/IVA
+        0: { cellWidth: 18, halign: 'center' },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 14, halign: 'center' },
+        3: { cellWidth: 18, halign: 'center' },
+        4: { cellWidth: 24, halign: 'right' },
+        5: { cellWidth: 12, halign: 'center' },
+        6: { cellWidth: 24, halign: 'right' },
+        7: { cellWidth: 12, halign: 'center' },
+        8: { cellWidth: 24, halign: 'right' },
       },
       didDrawPage: () => {
-        // Footer watermark
         doc.setFontSize(7)
         doc.setTextColor(160)
         const pw = doc.internal.pageSize.getWidth()
@@ -298,7 +364,6 @@ export async function exportOrdenPDF(rows: ProductoCompra[], entregaDefault: str
       },
     })
 
-    // ── Totals ───────────────────────────────────────
     const finalY = (doc as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? tableY + 40
     const totalsY = finalY + 4
     const totW = 80

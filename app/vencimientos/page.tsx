@@ -18,6 +18,7 @@ import { SkeletonCard, SkeletonTable } from '@/components/ui/skeleton'
 import { Pagination } from '@/components/ui/pagination'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { usePagination } from '@/lib/hooks/use-pagination'
+import { hoyISO } from '@/lib/format'
 
 type Estado = Vencimiento['estado']
 
@@ -180,7 +181,7 @@ export default function VencimientosPage() {
         .update({ cantidad: cant, fecha_vencimiento: editFecha, updated_at: new Date().toISOString() })
         .eq('id', editingVenc.lote_id)
       if (error) throw error
-      const today = new Date().toISOString().split('T')[0]
+      const today = hoyISO()
       const dias = Math.floor((new Date(editFecha).getTime() - new Date(today).getTime()) / 86400000)
       const nuevoEstado: Estado =
         dias < 0 ? 'vencido' : dias <= 7 ? 'critico' : dias <= 30 ? 'alerta' : dias <= 90 ? 'proximo' : 'ok'

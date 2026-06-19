@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { matchesQuery } from '@/lib/search'
+import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
+import { SUCURSALES_OPERATIVAS } from '@/lib/constants'
 
 function ProductPicker({ value, onChange, productos, placeholder }: {
   value: string
@@ -71,12 +73,7 @@ function ProductPicker({ value, onChange, productos, placeholder }: {
   )
 }
 
-const SUCURSALES = [
-  { id: 'a0000000-0000-0000-0000-000000000001', nombre: 'SOHO 1 - Local' },
-  { id: 'a0000000-0000-0000-0000-000000000002', nombre: 'SOHO 1 - La Pieza' },
-  { id: 'a0000000-0000-0000-0000-000000000003', nombre: 'SOHO 2 - Local' },
-  { id: 'a0000000-0000-0000-0000-000000000004', nombre: 'SOHO 2 - Depósito' },
-]
+const SUCURSALES: ReadonlyArray<{ id: string; nombre: string }> = SUCURSALES_OPERATIVAS
 
 interface Producto {
   id: string
@@ -131,15 +128,18 @@ export default function FraccionamientoPage() {
 
   useEffect(() => {
     async function load() {
-      const [prodRes, histRes] = await Promise.all([
-        supabase.from('productos').select('id,sku,nombre,categoria,stock_dux,codigo_barras').order('nombre'),
+      // productos tiene >3000 filas: leer con fetchAllFromView (PostgREST corta en 1000)
+      const [prods, histRes] = await Promise.all([
+        fetchAllFromView<Producto>('productos', {
+          select: 'id,sku,nombre,categoria,stock_dux,codigo_barras',
+          order: { column: 'nombre' },
+        }),
         supabase
           .from('fraccionamientos')
           .select('id,lote_origen,cantidad_origen_kg,fecha_fraccionamiento,merma_gramos,observaciones,producto_origen_id')
           .order('fecha_fraccionamiento', { ascending: false })
           .limit(50),
       ])
-      const prods = (prodRes.data ?? []) as Producto[]
       const hist = (histRes.data ?? []) as FraccionamientoRecord[]
 
       // Enrich historial with product names

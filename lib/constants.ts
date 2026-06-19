@@ -41,16 +41,6 @@ export const DIAS_VENCIMIENTO = {
   PROXIMO: 30,
 } as const
 
-// Purchase recommendation tiers (ordered by urgency)
-export const RECOMENDACION = {
-  NO_COMPRAR:      'no_comprar',
-  COMPRAR_POCO:    'comprar_poco',
-  COMPRAR_NORMAL:  'comprar_normal',
-  COMPRAR_URGENTE: 'comprar_urgente',
-  COMPRA_CRITICA:  'compra_critica',
-} as const
-export type Recomendacion = typeof RECOMENDACION[keyof typeof RECOMENDACION]
-
 // Promotion workflow states (ordered)
 export const PROMO_ESTADOS = [
   'propuesta',
@@ -63,5 +53,18 @@ export const PROMO_ESTADOS = [
 ] as const
 export type PromoEstado = typeof PROMO_ESTADOS[number]
 
-export const DIAS_SEMANA        = ['', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'] as const
-export const DIAS_SEMANA_LARGO  = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'] as const
+// ── Dux ERP ─────────────────────────────────────────────────────────
+// Mapeo de sucursal propia → IDs de Dux usados en v2/compras.
+// dux_deposito    = id_deposito (depósito físico en Dux)
+// dux_sucursal_id = sucursal lógica de Dux (1 = SOHO 1, 3 = SOHO 2)
+export const SUCURSALES_DUX: ReadonlyArray<{
+  id: string
+  nombre: string
+  dux_deposito: number
+  dux_sucursal_id: number
+}> = [
+  { id: SUCURSALES.SOHO1_LOCAL,    nombre: 'SOHO 1 - Local',    dux_deposito: 7951,  dux_sucursal_id: 1 },
+  { id: SUCURSALES.SOHO1_PIEZA,    nombre: 'SOHO 1 - La Pieza', dux_deposito: 8545,  dux_sucursal_id: 1 },
+  { id: SUCURSALES.SOHO2_LOCAL,    nombre: 'SOHO 2 - Local',    dux_deposito: 15289, dux_sucursal_id: 3 },
+  { id: SUCURSALES.SOHO2_DEPOSITO, nombre: 'SOHO 2 - Depósito', dux_deposito: 15513, dux_sucursal_id: 3 },
+]

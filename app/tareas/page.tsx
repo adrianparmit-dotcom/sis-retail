@@ -8,11 +8,12 @@ import {
   RotateCcw, AlertCircle, ChevronDown,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { SUCURSALES as SUCS } from '@/lib/constants'
 
 // ── Sucursales ────────────────────────────────────────────────────────────
 const SUCURSALES = [
-  { id: 'a0000000-0000-0000-0000-000000000001', label: 'SOHO 1', short: 'S1' },
-  { id: 'a0000000-0000-0000-0000-000000000003', label: 'SOHO 2', short: 'S2' },
+  { id: SUCS.SOHO1_LOCAL, label: 'SOHO 1', short: 'S1' },
+  { id: SUCS.SOHO2_LOCAL, label: 'SOHO 2', short: 'S2' },
 ]
 const STORAGE_KEY = 'tareas_sucursal_id'
 

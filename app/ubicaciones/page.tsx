@@ -6,9 +6,10 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { matchesQuery } from '@/lib/search'
+import { SUCURSALES } from '@/lib/constants'
 
-const PIEZA_ID = 'a0000000-0000-0000-0000-000000000002'
-const DEPOSITO_ID = 'a0000000-0000-0000-0000-000000000004'
+const PIEZA_ID = SUCURSALES.SOHO1_PIEZA
+const DEPOSITO_ID = SUCURSALES.SOHO2_DEPOSITO
 const SECTOR_ORDER = ['Cajones', 'Cajas']
 
 interface Producto {

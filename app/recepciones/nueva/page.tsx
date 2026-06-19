@@ -8,13 +8,10 @@ import type { ParsedInvoice, ParsedInvoiceItem } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
+import { SUCURSALES_OPERATIVAS } from '@/lib/constants'
+import { hoyISO } from '@/lib/format'
 
-const SUCURSALES = [
-  { id: 'a0000000-0000-0000-0000-000000000001', nombre: 'SOHO 1 - Local' },
-  { id: 'a0000000-0000-0000-0000-000000000002', nombre: 'SOHO 1 - La Pieza' },
-  { id: 'a0000000-0000-0000-0000-000000000003', nombre: 'SOHO 2 - Local' },
-  { id: 'a0000000-0000-0000-0000-000000000004', nombre: 'SOHO 2 - Depósito' },
-]
+const SUCURSALES: ReadonlyArray<{ id: string; nombre: string }> = SUCURSALES_OPERATIVAS
 
 type Step = 'paste' | 'review' | 'confirmed'
 
@@ -253,7 +250,7 @@ export default function NuevaRecepcionPage() {
         const expected = item.cantidad
         const fecha = item.fecha_vencimiento
         let estado: ParsedInvoiceItem['estado_recepcion'] = 'ok'
-        if (fecha && fecha < new Date().toISOString().split('T')[0]) {
+        if (fecha && fecha < hoyISO()) {
           estado = 'vencido_llegada'
         } else if (qty < expected) {
           estado = 'faltante'
@@ -281,7 +278,7 @@ export default function NuevaRecepcionPage() {
             dux_compra_id: invoice.comprobante || null,
             proveedor_nombre: invoice.proveedor || null,
             fecha_factura: fechaISO || null,
-            fecha_recepcion: new Date().toISOString().split('T')[0],
+            fecha_recepcion: hoyISO(),
             estado: 'borrador',
             sucursal_id: sucursalId,
             texto_original: texto,
@@ -333,7 +330,7 @@ export default function NuevaRecepcionPage() {
           .update({
             estado: 'confirmada',
             sucursal_id: sucursalId,
-            fecha_recepcion: new Date().toISOString().split('T')[0],
+            fecha_recepcion: hoyISO(),
           })
           .eq('id', borradorId)
         recId = borradorId
@@ -346,7 +343,7 @@ export default function NuevaRecepcionPage() {
             dux_compra_id: invoice.comprobante || null,
             proveedor_nombre: invoice.proveedor || null,
             fecha_factura: fechaISO || null,
-            fecha_recepcion: new Date().toISOString().split('T')[0],
+            fecha_recepcion: hoyISO(),
             estado: 'confirmada',
             sucursal_id: sucursalId,
             texto_original: texto,

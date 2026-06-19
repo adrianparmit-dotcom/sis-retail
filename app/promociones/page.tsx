@@ -208,11 +208,13 @@ export default function PromocionesPage() {
   }, [])
 
   useEffect(() => {
-    supabase.from('productos').select('sku,codigo_barras').then(({ data }) => {
-      if (data) setBarcodeMap(new Map(
-        (data as { sku: string; codigo_barras: string | null }[])
-          .filter(p => p.codigo_barras)
-          .map(p => [p.codigo_barras!, p.sku])
+    // productos tiene >3000 filas: sin paginar, el mapa de códigos de barras quedaba incompleto
+    fetchAllFromView<{ sku: string; codigo_barras: string | null }>('productos', {
+      select: 'sku,codigo_barras',
+      filters: [{ column: 'codigo_barras', operator: 'not.is', value: null }],
+    }).then(rows => {
+      setBarcodeMap(new Map(
+        rows.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p.sku])
       ))
     })
 

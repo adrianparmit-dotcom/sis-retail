@@ -9,13 +9,10 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { tokenize } from '@/lib/search'
+import { SUCURSALES_OPERATIVAS } from '@/lib/constants'
+import { hoyISO } from '@/lib/format'
 
-const SUCURSALES = [
-  { id: 'a0000000-0000-0000-0000-000000000001', nombre: 'SOHO 1 - Local' },
-  { id: 'a0000000-0000-0000-0000-000000000002', nombre: 'SOHO 1 - La Pieza' },
-  { id: 'a0000000-0000-0000-0000-000000000003', nombre: 'SOHO 2 - Local' },
-  { id: 'a0000000-0000-0000-0000-000000000004', nombre: 'SOHO 2 - Depósito' },
-]
+const SUCURSALES: ReadonlyArray<{ id: string; nombre: string }> = SUCURSALES_OPERATIVAS
 
 interface Producto {
   id: string
@@ -81,7 +78,7 @@ function CargaRapidaContent() {
     return ''
   }, [fechaAnio, fechaMes, fechaDia])
 
-  const today = useMemo(() => new Date().toISOString().split('T')[0], [])
+  const today = useMemo(() => hoyISO(), [])
   const isExpired = !!fecha && fecha < today
 
   // Reset confirmation whenever the selected date changes

@@ -79,8 +79,7 @@ App soho/                      ← raíz del workspace (cwd de las sesiones)
 - `supabase.ts` — cliente anon.
 - `types.ts` — tipos de dominio (`ProductoCompra`, `InvoiceLineItem`, `Lote`, `GranelDerivado`, etc.).
 - `constants.ts` — **fuente única** de IDs de sucursal y umbrales de negocio.
-- `format.ts` — formateo de moneda/números/fechas (es-AR).
-- `error.ts` — manejo de errores.
+- `format.ts` — formateo de moneda/números/fechas (es-AR) + `hoyISO()` (fecha local, NO usar `toISOString()` para "hoy").
 - `export-xlsx.ts` — `exportTablaXlsx<T>(...)` para Excel nativo (usar SIEMPRE este).
 - `export-orden.ts` — generación de Orden de Compra (CSV + PDF).
 - `invoice-parsers.ts` / `dux-parser.ts` — parsers de facturas y datos Dux.

@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { SUCURSAL_LABELS } from '@/lib/constants'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Loader2, CheckCircle2, Clock, ArrowRight } from 'lucide-react'
@@ -35,12 +36,7 @@ interface Transf {
   items               : TransfItem[]
 }
 
-const SUCURSAL_NOMBRES: Record<string, string> = {
-  'a0000000-0000-0000-0000-000000000001': 'SOHO 1 - Local',
-  'a0000000-0000-0000-0000-000000000002': 'SOHO 1 - La Pieza',
-  'a0000000-0000-0000-0000-000000000003': 'SOHO 2 - Local',
-  'a0000000-0000-0000-0000-000000000004': 'SOHO 2 - Depósito',
-}
+const SUCURSAL_NOMBRES = SUCURSAL_LABELS
 
 export default function TransferenciasPage() {
   const [transferencias, setTransferencias] = useState<Transf[]>([])
