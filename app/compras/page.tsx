@@ -261,7 +261,7 @@ export default function ComprasPage() {
     setSelectedProviders(prev => {
       const next = new Set(prev)
       if (next.has(p)) next.delete(p)
-      else if (next.size < 2) next.add(p)
+      else next.add(p)
       return next
     })
   }
