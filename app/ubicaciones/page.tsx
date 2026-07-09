@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -284,7 +285,7 @@ export default function UbicacionesPage() {
     const { error } = await supabase.from('cajones')
       .update({ sector: newSector, codigo: newCodigo })
       .eq('id', cajonId)
-    if (error) { alert('No se pudo cambiar tipo: ' + error.message); return }
+    if (error) { toast.error('No se pudo cambiar tipo: ' + error.message); return }
     setCajones(prev => prev.map(x => x.id === cajonId ? { ...x, sector: newSector, codigo: newCodigo } : x))
   }
 
@@ -295,13 +296,13 @@ export default function UbicacionesPage() {
     if (!c || c.numero === n) return
     // Check duplicates in same sucursal+sector
     const dup = cajones.some(x => x.id !== cajonId && x.sucursal_id === c.sucursal_id && x.sector === c.sector && x.numero === n)
-    if (dup) { alert(`Ya existe un ${c.sector === 'Cajas' ? 'Caja' : 'Cajón'} con número ${n} en esta sucursal.`); return }
+    if (dup) { toast.error(`Ya existe un ${c.sector === 'Cajas' ? 'Caja' : 'Cajón'} con número ${n} en esta sucursal.`); return }
     const prefix = c.sector === 'Cajas' ? 'CA' : 'C'
     const newCodigo = `${prefix}-${String(n).padStart(2, '0')}`
     const { error } = await supabase.from('cajones')
       .update({ numero: n, codigo: newCodigo })
       .eq('id', cajonId)
-    if (error) { alert('No se pudo cambiar número: ' + error.message); return }
+    if (error) { toast.error('No se pudo cambiar número: ' + error.message); return }
     setCajones(prev => prev.map(x => x.id === cajonId ? { ...x, numero: n, codigo: newCodigo } : x))
   }
 
@@ -312,7 +313,7 @@ export default function UbicacionesPage() {
     const next = trimmed === '' ? null : trimmed
     if (next === c.nota) return
     const { error } = await supabase.from('cajones').update({ nota: next }).eq('id', cajonId)
-    if (error) { alert('No se pudo guardar nota: ' + error.message); return }
+    if (error) { toast.error('No se pudo guardar nota: ' + error.message); return }
     setCajones(prev => prev.map(x => x.id === cajonId ? { ...x, nota: next } : x))
   }
 
@@ -326,7 +327,7 @@ export default function UbicacionesPage() {
       : `Eliminar ${label}?`
     if (!confirm(msg)) return
     const { error } = await supabase.from('cajones').delete().eq('id', cajonId)
-    if (error) { alert('No se pudo eliminar: ' + error.message); return }
+    if (error) { toast.error('No se pudo eliminar: ' + error.message); return }
     setCajones(prev => prev.filter(x => x.id !== cajonId))
     setCajonProductos(prev => prev.filter(cp => cp.cajon_id !== cajonId))
     if (editingId === cajonId) setEditingId(null)
@@ -342,8 +343,8 @@ export default function UbicacionesPage() {
     const raw = window.prompt(`Número de la nueva ${tipo}:`, String(suggested))
     if (!raw) return
     const n = parseInt(raw.trim())
-    if (!Number.isFinite(n) || n < 0) { alert('Número inválido'); return }
-    if (sameGroup.includes(n)) { alert(`Ya existe ${tipo} ${n} en esta sucursal.`); return }
+    if (!Number.isFinite(n) || n < 0) { toast.error('Número inválido'); return }
+    if (sameGroup.includes(n)) { toast.error(`Ya existe ${tipo} ${n} en esta sucursal.`); return }
     const prefix = sector === 'Cajas' ? 'CA' : 'C'
     const codigo = `${prefix}-${String(n).padStart(2, '0')}`
     const { data, error } = await supabase.from('cajones').insert({
@@ -352,7 +353,7 @@ export default function UbicacionesPage() {
       numero     : n,
       codigo,
     }).select('id,sucursal_id,codigo,sector,numero').single()
-    if (error || !data) { alert('No se pudo crear: ' + (error?.message ?? '')); return }
+    if (error || !data) { toast.error('No se pudo crear: ' + (error?.message ?? '')); return }
     setCajones(prev => [...prev, data as Cajon])
   }
 

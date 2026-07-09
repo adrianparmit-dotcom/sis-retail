@@ -174,7 +174,8 @@ Clasificación por facturación: **A** = top 70% acumulado, **B** = siguiente 20
 - IVA editable (21% / 10.5%), aprendido por proveedor. Múltiples fechas de vencimiento por ítem. Alerta ⚠️ si cambia la descripción del producto.
 
 ### Vencimientos / Reconciliación
-- Umbrales en `constants.ts` (`DIAS_VENCIMIENTO`: crítico 7 / alerta 15 / próximo 30).
+- Umbrales en `constants.ts` (`DIAS_VENCIMIENTO`: crítico 7 / alerta 30 / próximo 90 — alineados con `v_vencimientos_fefo`; el estado se calcula con `estadoVencimiento()` de `lib/vencimientos.ts`).
+- Reactivación de productos sin venta: `REACTIVACION_UNIDADES` en `constants.ts` (global 4 ud / sucursal 2 ud por sucursal).
 - Reconciliación compara stock Dux vs vencimientos cargados (estados ok / sin_carga / faltante / exceso).
 - Productos deshabilitados en Dux ⇒ marcar **anulados** (discontinuado + stock 0), no borrar.
 

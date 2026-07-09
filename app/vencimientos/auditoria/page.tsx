@@ -21,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { KpiCard } from '@/components/ui/kpi-card'
 import { SkeletonCard, SkeletonTable } from '@/components/ui/skeleton'
 import { Pagination } from '@/components/ui/pagination'
+import { ErrorBanner } from '@/components/ui/error-banner'
 
 type Tab = 'drift' | 'vencidos' | 'historial'
 type TipoMov = 'todos' | 'alta' | 'update' | 'delete'
@@ -43,8 +44,12 @@ export default function AuditoriaVencimientosPage() {
   const [tipoDriftFiltro, setTipoDriftFiltro] = useState<'todos' | 'exceso' | 'falta'>('todos')
   const [tipoMovFiltro, setTipoMovFiltro] = useState<TipoMov>('todos')
 
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
   useEffect(() => {
     const load = async () => {
+      setLoadError(false)
       try {
         const [d, v, m] = await Promise.all([
           fetchAllFromView<VencimientoDrift>('v_vencimientos_drift', {
@@ -58,12 +63,15 @@ export default function AuditoriaVencimientosPage() {
         setDrift(d)
         setVencidos(v)
         setMovs(m)
+      } catch (err) {
+        console.error('[auditoria-fefo] Error al cargar datos:', err)
+        setLoadError(true)
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [])
+  }, [reloadKey])
 
   const sucursales = useMemo(() => {
     const s = new Set<string>()
@@ -176,6 +184,7 @@ export default function AuditoriaVencimientosPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {loadError && <ErrorBanner onRetry={() => { setLoading(true); setReloadKey(k => k + 1) }} />}
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { toast } from 'sonner'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { parseDuxInvoice, duxDateToISO } from '@/lib/dux-parser'
@@ -311,7 +312,7 @@ export default function NuevaRecepcionPage() {
       setBorradorSavedAt(new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }))
     } catch (err) {
       console.error(err)
-      alert('Error al guardar el borrador.')
+      toast.error('No se pudo guardar el borrador. Revisá la conexión y volvé a intentar.')
     } finally {
       setSaving(false)
     }
@@ -434,7 +435,7 @@ export default function NuevaRecepcionPage() {
       setStep('confirmed')
     } catch (err) {
       console.error(err)
-      alert('Error al confirmar la recepción. Revisá la consola.')
+      toast.error('No se pudo confirmar la recepción. No se perdió nada: volvé a intentar en unos segundos.')
     } finally {
       setSaving(false)
     }

@@ -15,7 +15,9 @@ import { Pagination } from '@/components/ui/pagination'
 import { useOutsideClick } from '@/lib/hooks/use-outside-click'
 import { usePagination } from '@/lib/hooks/use-pagination'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
-import { INVERSION_ALERTA_PESOS } from '@/lib/constants'
+import { useBarcodeScan } from '@/lib/hooks/use-barcode-scan'
+import { INVERSION_ALERTA_PESOS, REACTIVACION_UNIDADES } from '@/lib/constants'
+import { ErrorBanner } from '@/components/ui/error-banner'
 import {
   Download, FileText, ChevronUp, ChevronDown, ChevronsUpDown, AlertTriangle,
   X, Settings2, Info, TrendingDown, Bell, ShoppingCart, PackageX, RefreshCw, Search,
@@ -33,7 +35,9 @@ type SortKey = 'sku' | 'nombre' | 'proveedor_nombre' | 'location_nombre' | 'cate
 function sugerenciaEfectiva(p: ProductoCompra): number {
   if (p.es_granel) return p.sugerencia_kg ?? 0
   if (p.sugerencia_compra > 0) return p.sugerencia_compra
-  if (p.ventas_30d === 0 && p.stock_actual === 0) return 4
+  // Reactivación: fila global = 4 ud; fila por sucursal = 2 ud por sucursal
+  if (p.ventas_30d === 0 && p.stock_actual === 0)
+    return p.location_id != null ? REACTIVACION_UNIDADES.SUCURSAL : REACTIVACION_UNIDADES.GLOBAL
   return 0
 }
 
@@ -241,23 +245,14 @@ export default function ComprasPage() {
   const [selectedProviders, setSelectedProviders] = useState<Set<string>>(new Set())
   const [sucursal, setSucursal] = useState<'todas' | 'soho1' | 'soho2'>('todas')
   const [barcodeMap, setBarcodeMap] = useState<Map<string, string>>(new Map())
-  const [scanHighlight, setScanHighlight] = useState<string | null>(null)
-  const [scanMiss, setScanMiss] = useState(false)
+  const { scanHighlight, scanMiss, markHit, markMiss } = useBarcodeScan()
   const [alertasHoy, setAlertasHoy] = useState<string[]>([])
   const [abcMap, setAbcMap] = useState<Map<string, 'A' | 'B' | 'C'>>(new Map())
   const [proveedoresConfig, setProveedoresConfig] = useState<ProveedorConfigHeader[]>([])
   const [productosCatalogo, setProductosCatalogo] = useState<ProductoCatalogo[]>([])
   const [ordenOpen, setOrdenOpen] = useState(false)
-
-  const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const missTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (scanTimerRef.current) clearTimeout(scanTimerRef.current)
-      if (missTimerRef.current) clearTimeout(missTimerRef.current)
-    }
-  }, [])
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   function toggleProvider(p: string) {
     setSelectedProviders(prev => {
@@ -276,13 +271,9 @@ export default function ComprasPage() {
     const found = data.find(p => p.sku === sku)
     if (found) {
       setSearch(found.nombre ?? found.sku)
-      setScanHighlight(found.id)
-      if (scanTimerRef.current) clearTimeout(scanTimerRef.current)
-      scanTimerRef.current = setTimeout(() => setScanHighlight(null), 3000)
+      markHit(found.id)
     } else {
-      setScanMiss(true)
-      if (missTimerRef.current) clearTimeout(missTimerRef.current)
-      missTimerRef.current = setTimeout(() => setScanMiss(false), 1500)
+      markMiss()
     }
   }
 
@@ -321,20 +312,18 @@ export default function ComprasPage() {
     const todayIso = new Date().getDay() === 0 ? 7 : new Date().getDay()
 
     const load = async () => {
+      setLoadError(false)
       try {
         // productos tiene >3000 filas: leer SIEMPRE con fetchAllFromView (PostgREST corta en 1000)
-        const [alertasRes, syncRes, catalogoData, abcData, provConfigRes, comprasData] = await Promise.all([
+        const [alertasRes, syncRes, catalogoData, provConfigRes, comprasData] = await Promise.all([
           supabase.from('proveedores_config').select('nombre, dia_pedido').eq('dia_pedido', todayIso),
           supabase.from('productos').select('dux_sync_at').not('dux_sync_at', 'is', null).limit(1),
           fetchAllFromView<{
             id: string; sku: string; nombre: string | null; categoria: string | null
             codigo_barras: string | null; stock_dux: number | null
             costo: number | null; iva_porcentaje: number | null; unidad_medida: string | null
-          }>('productos', { select: 'id,sku,nombre,categoria,codigo_barras,stock_dux,costo,iva_porcentaje,unidad_medida' }),
-          fetchAllFromView<{ id: string; clasificacion_abc: 'A' | 'B' | 'C' }>('productos', {
-            select: 'id,clasificacion_abc',
-            filters: [{ column: 'clasificacion_abc', operator: 'not.is', value: null }],
-          }),
+            clasificacion_abc: 'A' | 'B' | 'C' | null
+          }>('productos', { select: 'id,sku,nombre,categoria,codigo_barras,stock_dux,costo,iva_porcentaje,unidad_medida,clasificacion_abc' }),
           supabase.from('proveedores_config').select('nombre,cuit,direccion,telefono,localidad,provincia,iva_condicion,condicion_pago,condiciones_entrega'),
           fetchAllFromView<ProductoCompra>('v_compras_inteligentes_v4'),
         ])
@@ -360,17 +349,24 @@ export default function ComprasPage() {
           iva_porcentaje: p.iva_porcentaje,
           es_granel: p.unidad_medida === 'kg',
         })))
-        setAbcMap(new Map(abcData.map(p => [p.id, p.clasificacion_abc])))
+        setAbcMap(new Map(
+          catalogoData
+            .filter((p): p is typeof p & { clasificacion_abc: 'A' | 'B' | 'C' } => p.clasificacion_abc != null)
+            .map(p => [p.id, p.clasificacion_abc])
+        ))
         if (provConfigRes.data) {
           setProveedoresConfig(provConfigRes.data as ProveedorConfigHeader[])
         }
         setData(comprasData)
+      } catch (err) {
+        console.error('[compras] Error al cargar datos:', err)
+        setLoadError(true)
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [])
+  }, [reloadKey])
 
   const categorias = useMemo(() => {
     const cats = [...new Set(data.map(d => d.categoria).filter(Boolean))] as string[]
@@ -460,6 +456,8 @@ export default function ComprasPage() {
       </div>
 
       {/* Alerts */}
+      {loadError && <ErrorBanner onRetry={() => { setLoading(true); setReloadKey(k => k + 1) }} />}
+
       {alertasHoy.length > 0 && (
         <div className="rounded-md bg-indigo-50 border border-indigo-200 px-4 py-3 text-sm text-indigo-800 flex items-start gap-2">
           <Bell size={15} className="mt-0.5 shrink-0 text-indigo-500" />
@@ -568,7 +566,7 @@ export default function ComprasPage() {
           <SelectContent>
             <SelectItem value="urgente">Urgentes (&lt;30 días)</SelectItem>
             <SelectItem value="quiebre">Quiebres de stock detectados</SelectItem>
-            <SelectItem value="sinventa">Sin ventas — reactivar (2 ud)</SelectItem>
+            <SelectItem value="sinventa">Sin ventas — reactivar</SelectItem>
             <SelectItem value="negativo">Stock negativo</SelectItem>
             <SelectItem value="todas">Todos los productos</SelectItem>
           </SelectContent>
@@ -609,7 +607,7 @@ export default function ComprasPage() {
 
       {cobertura === 'sinventa' && (
         <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-2 text-sm text-blue-800">
-          Productos sin stock y sin ventas en 30 días. Se sugieren <strong>2 unidades</strong> como pedido mínimo de reactivación.
+          Productos sin stock y sin ventas en 30 días. Pedido mínimo de reactivación: <strong>{REACTIVACION_UNIDADES.GLOBAL} unidades</strong> (pedido global) o <strong>{REACTIVACION_UNIDADES.SUCURSAL} por sucursal</strong> (proveedores por sucursal).
         </div>
       )}
       {cobertura === 'negativo' && (

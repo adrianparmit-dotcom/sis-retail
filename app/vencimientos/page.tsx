@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { Pencil, X, Download } from 'lucide-react'
@@ -18,7 +18,10 @@ import { SkeletonCard, SkeletonTable } from '@/components/ui/skeleton'
 import { Pagination } from '@/components/ui/pagination'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { usePagination } from '@/lib/hooks/use-pagination'
+import { useBarcodeScan } from '@/lib/hooks/use-barcode-scan'
 import { hoyISO } from '@/lib/format'
+import { estadoVencimiento } from '@/lib/vencimientos'
+import { ErrorBanner } from '@/components/ui/error-banner'
 
 type Estado = Vencimiento['estado']
 
@@ -59,8 +62,9 @@ export default function VencimientosPage() {
   const [estado, setEstado] = useState('todos')
   const [sucursal, setSucursal] = useState('todas')
   const [barcodeMap, setBarcodeMap] = useState<Map<string, string>>(new Map())
-  const [scanHighlight, setScanHighlight] = useState<string | null>(null)
-  const [scanMiss, setScanMiss] = useState(false)
+  const { scanHighlight, scanMiss, markHit, markMiss } = useBarcodeScan()
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   const [editingVenc, setEditingVenc] = useState<Vencimiento | null>(null)
   const [editFecha, setEditFecha] = useState('')
@@ -68,18 +72,9 @@ export default function VencimientosPage() {
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState('')
 
-  const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const missTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (scanTimerRef.current) clearTimeout(scanTimerRef.current)
-      if (missTimerRef.current) clearTimeout(missTimerRef.current)
-    }
-  }, [])
-
   useEffect(() => {
     const load = async () => {
+      setLoadError(false)
       try {
         const [vencData, prodData] = await Promise.all([
           fetchAllFromView<Vencimiento>('v_vencimientos_fefo'),
@@ -94,12 +89,15 @@ export default function VencimientosPage() {
         ))
         setVencimientos(vencData)
         setProductos(prodData)
+      } catch (err) {
+        console.error('[vencimientos] Error al cargar datos:', err)
+        setLoadError(true)
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [])
+  }, [reloadKey])
 
   const productosConFecha = useMemo(
     () => new Set(vencimientos.map(v => v.producto_id)),
@@ -183,8 +181,8 @@ export default function VencimientosPage() {
       if (error) throw error
       const today = hoyISO()
       const dias = Math.floor((new Date(editFecha).getTime() - new Date(today).getTime()) / 86400000)
-      const nuevoEstado: Estado =
-        dias < 0 ? 'vencido' : dias <= 7 ? 'critico' : dias <= 30 ? 'alerta' : dias <= 90 ? 'proximo' : 'ok'
+      // Misma lógica que la vista v_vencimientos_fefo — evita que el badge cambie al recargar
+      const nuevoEstado = estadoVencimiento(dias) as Estado
       setVencimientos(prev => prev.map(v =>
         v.lote_id === editingVenc.lote_id
           ? { ...v, cantidad: cant, fecha_vencimiento: editFecha, dias_para_vencer: dias, estado: nuevoEstado }
@@ -207,25 +205,17 @@ export default function VencimientosPage() {
       const found = vencimientos.find(v => v.sku === sku)
       if (found) {
         setSearch(found.nombre ?? found.sku)
-        setScanHighlight(found.producto_id)
-        if (scanTimerRef.current) clearTimeout(scanTimerRef.current)
-        scanTimerRef.current = setTimeout(() => setScanHighlight(null), 3000)
+        markHit(found.producto_id)
       } else {
-        setScanMiss(true)
-        if (missTimerRef.current) clearTimeout(missTimerRef.current)
-        missTimerRef.current = setTimeout(() => setScanMiss(false), 1500)
+        markMiss()
       }
     } else {
       const found = productos.find(p => p.sku === sku)
       if (found) {
         setSearch(found.nombre ?? found.sku)
-        setScanHighlight(found.id)
-        if (scanTimerRef.current) clearTimeout(scanTimerRef.current)
-        scanTimerRef.current = setTimeout(() => setScanHighlight(null), 3000)
+        markHit(found.id)
       } else {
-        setScanMiss(true)
-        if (missTimerRef.current) clearTimeout(missTimerRef.current)
-        missTimerRef.current = setTimeout(() => setScanMiss(false), 1500)
+        markMiss()
       }
     }
   }
@@ -258,6 +248,8 @@ export default function VencimientosPage() {
           </Link>
         </div>
       </div>
+
+      {loadError && <ErrorBanner onRetry={() => { setLoading(true); setReloadKey(k => k + 1) }} />}
 
       {/* KPI cards */}
       {loading ? (

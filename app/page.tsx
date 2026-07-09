@@ -55,12 +55,14 @@ export default function HomePage() {
   useEffect(() => {
     const load = async () => {
       try {
+        // Vista v4 con los mismos filtros que los KPIs de /compras,
+        // para que los números de la home coincidan con el dashboard.
         const [
           syncRes, urgentesRes, sinStockRes, vencRes, preciosRes, reposRes,
         ] = await Promise.all([
           supabase.from('productos').select('dux_sync_at').order('dux_sync_at', { ascending: false }).limit(1).maybeSingle(),
-          supabase.from('v_compras_inteligentes').select('id', { count: 'exact', head: true }).lte('dias_cobertura', 7).gt('vel_diaria', 0),
-          supabase.from('v_compras_inteligentes').select('id', { count: 'exact', head: true }).lte('stock_actual', 0).gt('vel_diaria', 0),
+          supabase.from('v_compras_inteligentes_v4').select('id', { count: 'exact', head: true }).lt('dias_cobertura', 30).gt('ventas_30d', 0),
+          supabase.from('v_compras_inteligentes_v4').select('id', { count: 'exact', head: true }).eq('stock_actual', 0).gt('ventas_30d', 0),
           supabase.from('v_vencimientos_fefo').select('lote_id', { count: 'exact', head: true }).in('estado', ['vencido', 'critico']).gt('cantidad', 0),
           supabase.from('price_changes').select('id', { count: 'exact', head: true }).eq('visto', false),
           supabase.from('v_reposicion_dashboard').select('producto_id', { count: 'exact', head: true }).lte('soho1_local', 2),
@@ -73,6 +75,8 @@ export default function HomePage() {
           reposicionPendiente: reposRes.count ?? 0,
           lastSync:            (syncRes.data as { dux_sync_at: string } | null)?.dux_sync_at ?? null,
         })
+      } catch (err) {
+        console.error('[home] Error al cargar contadores:', err)
       } finally {
         setLoading(false)
       }

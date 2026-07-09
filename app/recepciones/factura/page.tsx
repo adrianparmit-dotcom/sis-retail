@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { toast } from 'sonner'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { parseFactura, calcPrecioVenta, detectProveedorType } from '@/lib/invoice-parsers'
@@ -1011,7 +1012,7 @@ export default function RecepcionFacturaPage() {
       if (recId) setBorradorId(recId)
       setStep('review')
     } catch (err) {
-      alert('Error al procesar el PDF: ' + (err as Error).message)
+      toast.error('Error al procesar el PDF: ' + (err as Error).message)
     } finally {
       setLoadingPdf(false)
       if (pdfInputRef.current) pdfInputRef.current.value = ''
@@ -1190,7 +1191,7 @@ export default function RecepcionFacturaPage() {
       if (!recId) throw new Error('No se pudo crear el borrador')
       setBorradorSavedAt(new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }))
     } catch (err) {
-      alert('Error al guardar borrador: ' + (err as Error).message)
+      toast.error('Error al guardar borrador: ' + (err as Error).message)
     } finally {
       setSavingBorrador(false)
     }
@@ -1508,7 +1509,7 @@ export default function RecepcionFacturaPage() {
 
       setStep('done')
     } catch (err) {
-      alert('Error al confirmar: ' + (err as Error).message)
+      toast.error('Error al confirmar: ' + (err as Error).message)
     } finally {
       setSaving(false)
     }

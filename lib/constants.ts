@@ -35,10 +35,18 @@ export const DIAS_COBERTURA = {
 } as const
 
 // Vencimiento state thresholds (days)
+// Alineados con la vista v_vencimientos_fefo (fecha < hoy+N ⇒ dias_para_vencer < N).
+// Si se cambian acá, hay que migrar la vista también.
 export const DIAS_VENCIMIENTO = {
   CRITICO: 7,
-  ALERTA:  15,
-  PROXIMO: 30,
+  ALERTA:  30,
+  PROXIMO: 90,
+} as const
+
+// Pedido mínimo de reactivación para productos sin stock y sin ventas 30d
+export const REACTIVACION_UNIDADES = {
+  GLOBAL:   4, // proveedor tipo 'global' (1 fila por producto)
+  SUCURSAL: 2, // proveedor tipo 'sucursal' (por cada sucursal)
 } as const
 
 // Promotion workflow states (ordered)

@@ -36,9 +36,30 @@ export async function GET(req: NextRequest) {
     if (k !== 'path' && k !== '_s') duxUrl.searchParams.set(k, v)
   })
 
-  const duxRes = await fetch(duxUrl.toString(), {
-    headers: { 'Authorization': DUX_TOKEN, 'Accept': 'application/json' },
-  })
+  // Timeout de 30s + 1 reintento: si Dux se cuelga, el consumidor (dux-sync)
+  // no debe quedar bloqueado hasta el límite del runtime y perder la ventana.
+  let duxRes: Response | null = null
+  let lastError = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 2000))
+    try {
+      duxRes = await fetch(duxUrl.toString(), {
+        headers: { 'Authorization': DUX_TOKEN, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (duxRes.status < 500) break // 5xx de Dux: vale la pena reintentar
+      lastError = `Dux respondió ${duxRes.status}`
+    } catch (err) {
+      duxRes = null
+      lastError = err instanceof Error ? err.message : 'error de red'
+    }
+  }
+
+  if (!duxRes) {
+    return new Response(JSON.stringify({ error: 'Dux no responde', detail: lastError }), {
+      status: 504, headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
   const body = await duxRes.text()
   return new Response(body, {

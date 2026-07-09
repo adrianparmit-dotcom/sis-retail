@@ -198,7 +198,7 @@ export default function TareasPage() {
       supabase.from('v_vencimientos_fefo').select('*', { count: 'exact', head: true }).in('estado', ['critico', 'alerta']),
       supabase.from('v_proveedores_sin_config').select('*', { count: 'exact', head: true }),
       supabase.from('cajon_productos').select('*', { count: 'exact', head: true }).eq('cantidad', 0),
-      supabase.from('v_compras_inteligentes').select('*', { count: 'exact', head: true }).lt('dias_cobertura', 7).gt('ventas_30d', 0),
+      supabase.from('v_compras_inteligentes_v4').select('*', { count: 'exact', head: true }).lt('dias_cobertura', 7).gt('ventas_30d', 0),
       supabase.from('promociones').select('*', { count: 'exact', head: true }).eq('estado', 'propuesta'),
     ]).then(results => {
       const keys = ['reconciliacion','reposicion','vencimientos','sin_proveedor','cajones','compras_urgentes','promociones']

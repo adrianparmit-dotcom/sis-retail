@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { matchesQuery } from '@/lib/search'
 import { PROMO_ESTADOS, type PromoEstado } from '@/lib/constants'
+import { ErrorBanner } from '@/components/ui/error-banner'
 import { Printer, Search, X, Star } from 'lucide-react'
 import Link from 'next/link'
 
@@ -193,6 +194,8 @@ export default function PromocionesPage() {
   const [saved, setSaved] = useState<Set<string>>(new Set()) // product_ids already saved this session
   const [search, setSearch] = useState('')
   const [filtroEstado, setFiltroEstado] = useState<string>('todos')
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [barcodeMap, setBarcodeMap] = useState<Map<string, string>>(new Map())
   const [scanHighlight, setScanHighlight] = useState<string | null>(null)
   const [scanMiss, setScanMiss] = useState(false)
@@ -216,16 +219,19 @@ export default function PromocionesPage() {
       setBarcodeMap(new Map(
         rows.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p.sku])
       ))
-    })
+    }).catch(err => console.error('[promociones] Error al cargar códigos de barras:', err))
 
     async function load() {
+      setLoadError(false)
       const [vencRes, comprasData, promoRes] = await Promise.all([
         supabase
           .from('v_vencimientos_fefo')
           .select('*')
           .in('estado', ['critico', 'alerta', 'proximo'])
           .gt('cantidad', 0),
-        fetchAllFromView<ProductoCompra>('v_compras_inteligentes', {
+        // Vista v4 (algoritmo activo). Para proveedores tipo 'sucursal' emite
+        // 2 filas por producto — computeSugerencias dedupe por id (Set `seen`).
+        fetchAllFromView<ProductoCompra>('v_compras_inteligentes_v4', {
           filters: [{ column: 'stock_actual', operator: 'gt', value: 0 }],
         }),
         supabase
@@ -255,8 +261,12 @@ export default function PromocionesPage() {
       setSaved(savedIds)
       setLoading(false)
     }
-    load()
-  }, [])
+    load().catch(err => {
+      console.error('[promociones] Error al cargar datos:', err)
+      setLoadError(true)
+      setLoading(false)
+    })
+  }, [reloadKey])
 
   const guardarPromo = useCallback(async (s: Sugerencia) => {
     setSaving(prev => new Set(prev).add(s.producto_id))
@@ -324,6 +334,7 @@ export default function PromocionesPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {loadError && <ErrorBanner onRetry={() => { setLoading(true); setReloadKey(k => k + 1) }} />}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold text-zinc-900">Promociones Inteligentes</h1>

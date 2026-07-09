@@ -15,6 +15,7 @@ import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { usePagination } from '@/lib/hooks/use-pagination'
 import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
 import { GONDOLA_MAX_UNITS } from '@/lib/constants'
+import { ErrorBanner } from '@/components/ui/error-banner'
 import { ArrowRight, ShoppingCart, Shuffle, MoveHorizontal, CheckCircle, Download, Search, X } from 'lucide-react'
 
 type Accion = 'ok' | 'redistribuir_s1' | 'redistribuir_s2' | 'traslado_entre_tiendas' | 'comprar'
@@ -129,8 +130,12 @@ export default function ReposicionPage() {
     }
   }, [])
 
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
   useEffect(() => {
     const load = async () => {
+      setLoadError(false)
       try {
         // productos tiene >3000 filas: sin paginar, el mapa de códigos de barras quedaba incompleto
         const [syncRes, barcodes, reposData] = await Promise.all([
@@ -146,12 +151,15 @@ export default function ReposicionPage() {
           barcodes.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p.sku])
         ))
         setData(reposData)
+      } catch (err) {
+        console.error('[reposicion] Error al cargar datos:', err)
+        setLoadError(true)
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [])
+  }, [reloadKey])
 
   const enriched = useMemo(() =>
     data.map(r => ({ ...r, rec: computeRecomendacion(r) })),
@@ -221,6 +229,7 @@ export default function ReposicionPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {loadError && <ErrorBanner onRetry={() => { setLoading(true); setReloadKey(k => k + 1) }} />}
 
       {/* Header */}
       <div>
