@@ -131,7 +131,9 @@ function ProviderCombobox({
         <span className="flex-1 text-left truncate">
           {selected.size === 0
             ? <span className="text-muted-foreground">Todos los proveedores</span>
-            : [...selected].join(', ')}
+            : selected.size === 1
+            ? [...selected][0]
+            : `${selected.size} proveedores`}
         </span>
         {selected.size > 0
           ? <X size={14} className="text-zinc-400 hover:text-zinc-700 shrink-0" onClick={e => { e.stopPropagation(); onClear() }} />
