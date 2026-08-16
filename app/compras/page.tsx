@@ -324,9 +324,16 @@ export default function ComprasPage() {
             codigo_barras: string | null; stock_dux: number | null
             costo: number | null; iva_porcentaje: number | null; unidad_medida: string | null
             clasificacion_abc: 'A' | 'B' | 'C' | null
-          }>('productos', { select: 'id,sku,nombre,categoria,codigo_barras,stock_dux,costo,iva_porcentaje,unidad_medida,clasificacion_abc' }),
+          }>('productos', {
+            select: 'id,sku,nombre,categoria,codigo_barras,stock_dux,costo,iva_porcentaje,unidad_medida,clasificacion_abc',
+            order: { column: 'id' }, // orden único: sin esto la paginación duplica y pierde filas
+          }),
           supabase.from('proveedores_config').select('nombre,cuit,direccion,telefono,localidad,provincia,iva_condicion,condicion_pago,condiciones_entrega'),
-          fetchAllFromView<ProductoCompra>('v_compras_inteligentes_v4'),
+          // (sku, location_id) es la clave única de la vista. Su ORDER BY interno
+          // empata en ventas_30d=0 y la paginación traía SKUs duplicados.
+          fetchAllFromView<ProductoCompra>('v_compras_inteligentes_v4', {
+            order: [{ column: 'sku' }, { column: 'location_id' }],
+          }),
         ])
         if (alertasRes.data && alertasRes.data.length > 0) {
           setAlertasHoy((alertasRes.data as { nombre: string }[]).map(r => r.nombre))
@@ -402,13 +409,24 @@ export default function ComprasPage() {
         av = (a[sortKey as keyof ProductoCompra] ?? null) as number | string | null
         bv = (b[sortKey as keyof ProductoCompra] ?? null) as number | string | null
       }
-      if (av === null && bv === null) return 0
-      if (av === null) return 1
-      if (bv === null) return -1
-      const cmp = typeof av === 'string' && typeof bv === 'string'
-        ? av.localeCompare(bv, 'es')
-        : (Number(av) || 0) - (Number(bv) || 0)
-      return sortDir === 'asc' ? cmp : -cmp
+      // Los nulos van siempre al final, en ambas direcciones.
+      if (av === null && bv !== null) return 1
+      if (bv === null && av !== null) return -1
+
+      let cmp = 0
+      if (av !== null && bv !== null) {
+        const raw = typeof av === 'string' && typeof bv === 'string'
+          ? av.localeCompare(bv, 'es')
+          : (Number(av) || 0) - (Number(bv) || 0)
+        cmp = sortDir === 'asc' ? raw : -raw
+      }
+      if (cmp !== 0) return cmp
+
+      // Desempate estable por nombre. Sin esto, ordenar por una columna de baja
+      // cardinalidad (ej. "Vtas 7d", donde decenas de filas valen 0, o "Suc."
+      // con solo 2 valores) dejaba las filas empatadas en su orden anterior y
+      // parecía que el click no hacía nada.
+      return (a.nombre ?? a.sku).localeCompare(b.nombre ?? b.sku, 'es')
     })
 
     return result

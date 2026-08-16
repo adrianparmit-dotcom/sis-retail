@@ -404,7 +404,10 @@ function CargaRapidaContent() {
 
       const orden = allProds
         .map(p => ({ ...p, stock_dux: stockMap.get(p.id) ?? 0 }))
-        .sort((a, b) => b.stock_dux - a.stock_dux) as Producto[]
+        // Desempate por nombre: muchos productos comparten stock y la orden de
+        // trabajo salía en orden distinto cada vez que se abría la pantalla.
+        .sort((a, b) =>
+          (b.stock_dux - a.stock_dux) || (a.nombre ?? a.sku).localeCompare(b.nombre ?? b.sku, 'es')) as Producto[]
 
       setOrdenTrabajo(orden)
     } catch {

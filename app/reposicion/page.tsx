@@ -144,6 +144,7 @@ export default function ReposicionPage() {
           fetchAllFromView<{ sku: string; codigo_barras: string | null }>('productos', {
             select: 'sku,codigo_barras',
             filters: [{ column: 'codigo_barras', operator: 'not.is', value: null }],
+            order: { column: 'sku' }, // orden único: sin esto la paginación duplica y pierde filas
           }),
           fetchAllFromView<ReposicionItem>('v_reposicion_dashboard'),
         ])
@@ -186,7 +187,10 @@ export default function ReposicionPage() {
         if (filtro !== 'todos' && r.rec.accion !== filtro) return false
         return true
       })
-      .sort((a, b) => b.rec.urgencia - a.rec.urgencia),
+      // Desempate por nombre: muchas filas comparten urgencia y sin criterio
+      // estable el listado cambiaba de orden entre recargas.
+      .sort((a, b) =>
+        (b.rec.urgencia - a.rec.urgencia) || (a.nombre ?? a.sku).localeCompare(b.nombre ?? b.sku, 'es')),
     [enriched, search, filtro]
   )
 

@@ -178,10 +178,12 @@ function computeSugerencias(
   // Sort: near-expiry first, then by dias_al_vencimiento asc
   return sugs.sort((a, b) => {
     if (a.dias_al_vencimiento !== null && b.dias_al_vencimiento !== null)
-      return a.dias_al_vencimiento - b.dias_al_vencimiento
+      return (a.dias_al_vencimiento - b.dias_al_vencimiento)
+        || (a.nombre ?? a.sku).localeCompare(b.nombre ?? b.sku, 'es')
     if (a.dias_al_vencimiento !== null) return -1
     if (b.dias_al_vencimiento !== null) return 1
-    return 0
+    // Desempate estable: sin esto el bloque sin vencimiento salía en orden arbitrario.
+    return (a.nombre ?? a.sku).localeCompare(b.nombre ?? b.sku, 'es')
   })
 }
 
@@ -215,6 +217,7 @@ export default function PromocionesPage() {
     fetchAllFromView<{ sku: string; codigo_barras: string | null }>('productos', {
       select: 'sku,codigo_barras',
       filters: [{ column: 'codigo_barras', operator: 'not.is', value: null }],
+      order: { column: 'sku' }, // orden único: sin esto la paginación duplica y pierde filas
     }).then(rows => {
       setBarcodeMap(new Map(
         rows.filter(p => p.codigo_barras).map(p => [p.codigo_barras!, p.sku])
@@ -233,6 +236,7 @@ export default function PromocionesPage() {
         // 2 filas por producto — computeSugerencias dedupe por id (Set `seen`).
         fetchAllFromView<ProductoCompra>('v_compras_inteligentes_v4', {
           filters: [{ column: 'stock_actual', operator: 'gt', value: 0 }],
+          order: [{ column: 'sku' }, { column: 'location_id' }], // clave única de la vista
         }),
         supabase
           .from('promociones')
@@ -478,7 +482,11 @@ function PromosMes({
   // Top 5: first 2 near-expiry (if any), rest slow-movers with best stock×vel score
   const nearExpiry  = sugerencias.filter(s => s.dias_al_vencimiento !== null).slice(0, 2)
   const slowMovers  = sugerencias.filter(s => s.dias_al_vencimiento === null)
-    .sort((a, b) => (b.stock * b.velocidad_venta_diaria) - (a.stock * a.velocidad_venta_diaria))
+    // Desempate por nombre: sin criterio estable, los empates en stock×velocidad
+    // cambiaban QUÉ productos entraban en el top 5 de una carga a otra.
+    .sort((a, b) =>
+      ((b.stock * b.velocidad_venta_diaria) - (a.stock * a.velocidad_venta_diaria))
+      || (a.nombre ?? a.sku).localeCompare(b.nombre ?? b.sku, 'es'))
     .slice(0, 5 - nearExpiry.length)
   const top5 = [...nearExpiry, ...slowMovers].slice(0, 5)
 

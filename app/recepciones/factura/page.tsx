@@ -317,7 +317,10 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
       if (ctxTokens) for (const t of tokens) if (ctxTokens.has(t)) score += 1
       return { p, score }
     }).filter(x => x.score > 0)
-    scored.sort((a, b) => b.score - a.score)
+    // Desempate por nombre: muchos productos comparten score y sin criterio
+    // estable cambiaba CUÁLES 30 entraban en la lista entre búsquedas iguales.
+    scored.sort((a, b) =>
+      (b.score - a.score) || (a.p.nombre ?? a.p.sku).localeCompare(b.p.nombre ?? b.p.sku, 'es'))
     return scored.slice(0, 30).map(x => x.p)
   }, [productos, q, supplierContext])
 
@@ -467,7 +470,10 @@ function GranelMapper({ productos, supplierContext, derivados, onChange, onClose
         return { p, score }
       })
       .filter(x => x.score > 0)
-    scored.sort((a, b) => b.score - a.score)
+    // Desempate por nombre: muchos productos comparten score y sin criterio
+    // estable cambiaba CUÁLES 30 entraban en la lista entre búsquedas iguales.
+    scored.sort((a, b) =>
+      (b.score - a.score) || (a.p.nombre ?? a.p.sku).localeCompare(b.p.nombre ?? b.p.sku, 'es'))
     return scored.slice(0, 30).map(x => x.p)
   }, [productos, q, supplierContext, derivados])
 
