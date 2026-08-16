@@ -1409,69 +1409,61 @@ export default function RecepcionFacturaPage() {
         updated_at      : new Date().toISOString(),
       }).eq('id', recId)
 
+      // Alta o suma de un vencimiento. Se repetía en tres lugares.
+      const sumarVencimiento = async (productoId: string, fecha: string, cantidad: number) => {
+        if (!fecha || cantidad <= 0) return
+        const { data: existing } = await supabase.from('vencimientos')
+          .select('id,cantidad')
+          .eq('producto_id', productoId)
+          .eq('sucursal_id', sucursalId)
+          .eq('fecha_vencimiento', fecha)
+          .maybeSingle()
+        if (existing) {
+          const prev = (existing as { id: string; cantidad: number })
+          await supabase.from('vencimientos')
+            .update({ cantidad: prev.cantidad + cantidad, updated_at: new Date().toISOString() })
+            .eq('id', prev.id)
+        } else {
+          await supabase.from('vencimientos').insert({
+            producto_id      : productoId,
+            sucursal_id      : sucursalId,
+            fecha_vencimiento: fecha,
+            cantidad         : cantidad,
+            origen           : 'recepcion_factura',
+            recepcion_id     : recId,
+          })
+        }
+      }
+
       // ── 2. Crear vencimientos (los items y sus lotes ya estan en DB) ──
       for (const item of items) {
-        if (item.es_granel) continue
-        // Multi-lot path
-        if (item.lotes.length > 0) {
-          const validLotes = item.lotes.filter(l => l.cantidad > 0)
-          if (item.producto_id && item.estado_recepcion !== 'vencido_llegada') {
-            for (const l of validLotes) {
-              if (!l.fecha_vencimiento) continue
-              const { data: existing } = await supabase.from('vencimientos')
-                .select('id,cantidad')
-                .eq('producto_id', item.producto_id)
-                .eq('sucursal_id', sucursalId)
-                .eq('fecha_vencimiento', l.fecha_vencimiento)
-                .maybeSingle()
-              if (existing) {
-                await supabase.from('vencimientos')
-                  .update({ cantidad: (existing as { id: string; cantidad: number }).cantidad + l.cantidad,
-                    updated_at: new Date().toISOString() })
-                  .eq('id', (existing as { id: string }).id)
-              } else {
-                await supabase.from('vencimientos').insert({
-                  producto_id      : item.producto_id,
-                  sucursal_id      : sucursalId,
-                  fecha_vencimiento: l.fecha_vencimiento,
-                  cantidad         : l.cantidad,
-                  origen           : 'recepcion_factura',
-                  recepcion_id     : recId,
-                })
-              }
-            }
+        // Granel: el bulto madre no es un producto de stock, pero los SKUs
+        // fraccionados sí. Heredan la fecha del envase original — embolsar el
+        // día 12 no cambia cuándo vence la mercadería. Antes se salteaba entero
+        // y por eso el granel tenía 0% de cobertura siendo el 36% del stock.
+        if (item.es_granel) {
+          if (item.estado_recepcion === 'vencido_llegada') continue
+          const fechaMadre = item.lotes.find(l => l.fecha_vencimiento)?.fecha_vencimiento
+            ?? item.fecha_vencimiento
+          if (!fechaMadre) continue
+          for (const d of item.derivados ?? []) {
+            await sumarVencimiento(d.producto_id, fechaMadre, d.cantidad_objetivo ?? 0)
           }
           continue
         }
-        // Single-lot legacy path
-        if (
-          item.producto_id &&
-          item.fecha_vencimiento &&
-          item.cantidad_recibida > 0 &&
-          item.estado_recepcion !== 'vencido_llegada'
-        ) {
-          const { data: existing } = await supabase.from('vencimientos')
-            .select('id,cantidad')
-            .eq('producto_id', item.producto_id)
-            .eq('sucursal_id', sucursalId)
-            .eq('fecha_vencimiento', item.fecha_vencimiento)
-            .maybeSingle()
+        if (!item.producto_id || item.estado_recepcion === 'vencido_llegada') continue
 
-          if (existing) {
-            await supabase.from('vencimientos')
-              .update({ cantidad: (existing as { id: string; cantidad: number }).cantidad + item.cantidad_recibida,
-                updated_at: new Date().toISOString() })
-              .eq('id', (existing as { id: string }).id)
-          } else {
-            await supabase.from('vencimientos').insert({
-              producto_id      : item.producto_id,
-              sucursal_id      : sucursalId,
-              fecha_vencimiento: item.fecha_vencimiento,
-              cantidad         : item.cantidad_recibida,
-              origen           : 'recepcion_factura',
-              recepcion_id     : recId,
-            })
+        // Multi-lote: una fecha por lote.
+        if (item.lotes.length > 0) {
+          for (const l of item.lotes) {
+            if (!l.fecha_vencimiento || l.cantidad <= 0) continue
+            await sumarVencimiento(item.producto_id, l.fecha_vencimiento, l.cantidad)
           }
+          continue
+        }
+        // Un solo lote.
+        if (item.fecha_vencimiento) {
+          await sumarVencimiento(item.producto_id, item.fecha_vencimiento, item.cantidad_recibida)
         }
       }
 
@@ -1530,7 +1522,45 @@ export default function RecepcionFacturaPage() {
 
       // ── 4. POST to Dux v2/compras ────────────────────────────
       // Include all matched items (granel included — Dux needs the purchase registered)
-      const duxItems = items.filter(i => i.producto_sku && i.cantidad > 0)
+      // Líneas que van a la compra de Dux.
+      //
+      // El granel no tiene un SKU propio: el bulto madre no existe en el ERP.
+      // Lo que se registra son los N SKUs fraccionados con sus cantidades —
+      // exactamente lo que hoy se carga a mano en Dux. Se reparte el costo del
+      // bulto entre los derivados a prorrata de las unidades, para que el total
+      // de la línea siga cerrando contra la factura.
+      type LineaDux = { sku: string; cantidad: number; costo: number; iva: number; recibida: number }
+      const duxItems: LineaDux[] = []
+      for (const i of items) {
+        if (i.cantidad <= 0) continue
+
+        if (i.es_granel) {
+          const derivados = (i.derivados ?? []).filter(d => (d.cantidad_objetivo ?? 0) > 0)
+          const totalUnidades = derivados.reduce((s, d) => s + (d.cantidad_objetivo ?? 0), 0)
+          if (totalUnidades === 0) continue
+          const valorLinea = i.costo_unitario * i.cantidad
+          for (const d of derivados) {
+            const unidades = d.cantidad_objetivo ?? 0
+            duxItems.push({
+              sku      : d.producto_sku,
+              cantidad : unidades,
+              costo    : Math.round(valorLinea * (unidades / totalUnidades) / unidades * 100) / 100,
+              iva      : i.iva_porcentaje,
+              recibida : unidades,
+            })
+          }
+          continue
+        }
+
+        if (!i.producto_sku) continue
+        duxItems.push({
+          sku      : i.producto_sku,
+          cantidad : i.cantidad,
+          costo    : i.costo_unitario,
+          iva      : i.iva_porcentaje,
+          recibida : i.cantidad_recibida,
+        })
+      }
 
       // Resolve id_proveedor for the Dux purchase:
       // Priority 1: dux_proveedor_id set explicitly in proveedores_config (by proveedor_nombre)
@@ -1583,17 +1613,16 @@ export default function RecepcionFacturaPage() {
           tipo_comprobante: letraComprobante,
           // For granel: use invoice quantity (what physically arrived), not cantidad_recibida
           productos: duxItems.map(i => ({
-            id_item         : i.producto_sku!,
-            cantidad        : i.cantidad,  // siempre la cantidad de factura (Fact.), no la recibida
-            precio_unitario : i.costo_unitario,
+            id_item         : i.sku,
+            cantidad        : i.cantidad,
+            precio_unitario : i.costo,
             // Alícuota de la línea: sin esto Dux aplica la del maestro del ítem
             // e ignora el IVA que se cargó acá (21 vs 10.5).
-            iva_porcentaje  : i.iva_porcentaje,
+            iva_porcentaje  : i.iva,
             // Lo que realmente entró, que puede diferir de lo facturado. Dux
             // lleva esto en ctd_recepcionada; antes la diferencia se quedaba
             // en SOHO y el faltante nunca llegaba al ERP para reclamarlo.
-            // En granel la cantidad física es la de factura, no la fraccionada.
-            cantidad_recibida: i.es_granel ? i.cantidad : i.cantidad_recibida,
+            cantidad_recibida: i.recibida,
           })),
         }
 

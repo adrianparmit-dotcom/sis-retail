@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { matchesQuery } from '@/lib/search'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { SUCURSALES_OPERATIVAS } from '@/lib/constants'
+import { TrabajoPendiente } from './pendiente'
 
 function ProductPicker({ value, onChange, productos, placeholder }: {
   value: string
@@ -114,6 +115,7 @@ export default function FraccionamientoPage() {
   const [historial, setHistorial] = useState<FraccionamientoRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  const [vista, setVista] = useState<'pendiente' | 'suelto'>('pendiente')
 
   // Form state
   const [origenId, setOrigenId] = useState('')
@@ -279,11 +281,41 @@ export default function FraccionamientoPage() {
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-zinc-900">Fraccionamiento y Mermas</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">Registrá el fraccionamiento de productos a granel en unidades</p>
+          <h1 className="text-xl font-semibold text-zinc-900">Fraccionamiento</h1>
+          <p className="text-sm text-zinc-500 mt-0.5">
+            {vista === 'pendiente'
+              ? 'Bultos declarados en recepción que faltan terminar de embolsar'
+              : 'Registro suelto de un fraccionamiento con su merma'}
+          </p>
         </div>
-        <Button onClick={() => { setShowForm(true); setError('') }}>+ Nuevo fraccionamiento</Button>
+        {vista === 'suelto' && (
+          <Button onClick={() => { setShowForm(true); setError('') }}>+ Nuevo fraccionamiento</Button>
+        )}
       </div>
+
+      {/* El pendiente es el flujo real: el bulto se declara al recibir y se
+          embolsa a lo largo de 10-15 días. El registro suelto queda para casos
+          que no vienen de una recepción. */}
+      <div className="flex gap-1 border-b border-zinc-200">
+        {([['pendiente','Trabajo pendiente'],['suelto','Registro suelto']] as const).map(([v, label]) => (
+          <button
+            key={v}
+            onClick={() => setVista(v)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              vista === v
+                ? 'border-indigo-600 text-indigo-700'
+                : 'border-transparent text-zinc-500 hover:text-zinc-700'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {vista === 'pendiente' && <TrabajoPendiente />}
+      {vista === 'suelto' && (
+      <>
+
 
       {/* Form */}
       {showForm && (
@@ -484,6 +516,8 @@ export default function FraccionamientoPage() {
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   )
 }
