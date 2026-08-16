@@ -15,7 +15,10 @@ export function Pagination({ page, pageSize, total, onPage, className }: Paginat
   const to = Math.min(page * pageSize, total)
 
   return (
-    <div className={cn('flex items-center justify-between text-sm text-gray-500', className)}>
+    // pb-16: la burbuja de ayuda es `fixed` abajo a la derecha y tapaba estos
+    // botones al final de la página — el click caía sobre la burbuja en vez de
+    // sobre "Página siguiente". Este espacio los deja siempre alcanzables.
+    <div className={cn('flex items-center justify-between text-sm text-gray-500 pb-16', className)}>
       <span>
         {total === 0
           ? 'Sin resultados'
