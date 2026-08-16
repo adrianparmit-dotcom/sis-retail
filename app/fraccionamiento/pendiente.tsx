@@ -82,6 +82,11 @@ export function TrabajoPendiente() {
       const pr = prodMap.get(f.producto_final_id)
       const fila: FilaPendiente = {
         ...f,
+        // Number() explícito: son columnas `numeric` y si alguna vez llegaran
+        // como texto, `cantidad_fraccionada + suma` concatenaría ("8"+5="85")
+        // en vez de sumar.
+        cantidad_objetivo   : Number(f.cantidad_objetivo ?? 0),
+        cantidad_fraccionada: Number(f.cantidad_fraccionada ?? 0),
         sku            : pr?.sku ?? '—',
         nombre         : pr?.nombre ? toTitleCase(pr.nombre) : '—',
         bulto          : it?.descripcion_proveedor ?? 'Bulto sin descripción',
@@ -112,6 +117,26 @@ export function TrabajoPendiente() {
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
+
+  /** Define cuántas unidades salen del bulto. Se puede hacer acá porque es
+   *  donde se nota que falta: si el objetivo quedó vacío en la recepción, la
+   *  fila mostraba "0 /" y no dejaba registrar nada. */
+  async function definirObjetivo(fila: FilaPendiente) {
+    const obj = Number(borrador[`obj:${fila.id}`])
+    if (!Number.isFinite(obj) || obj <= 0) {
+      toast.error('Poné cuántas unidades salen del bulto')
+      return
+    }
+    setGuardando(fila.id)
+    const { error } = await supabase.from('recepcion_item_fraccionamiento')
+      .update({ cantidad_objetivo: obj, updated_at: new Date().toISOString() })
+      .eq('id', fila.id)
+    setGuardando(null)
+    if (error) { toast.error('No se pudo guardar: ' + error.message); return }
+    setBorrador(b => ({ ...b, [`obj:${fila.id}`]: '' }))
+    toast.success(`${fila.nombre}: ${obj} unidades a fraccionar`)
+    cargar()
+  }
 
   async function registrar(fila: FilaPendiente) {
     const suma = Number(borrador[fila.id])
@@ -158,10 +183,14 @@ export function TrabajoPendiente() {
   return (
     <div className="space-y-4">
       {bultos.map(b => {
-        const objetivo   = b.filas.reduce((s, f) => s + f.cantidad_objetivo, 0)
-        const hecho      = b.filas.reduce((s, f) => s + Math.min(f.cantidad_fraccionada, f.cantidad_objetivo), 0)
+        // Una fila sin objetivo definido no se puede dar por terminada: si se
+        // contara como 0 de 0, el bulto entero figuraba "✓ completo" y no
+        // dejaba hacer nada.
+        const sinDefinir = b.filas.filter(f => !(f.cantidad_objetivo > 0)).length
+        const objetivo   = b.filas.reduce((s, f) => s + Math.max(0, f.cantidad_objetivo), 0)
+        const hecho      = b.filas.reduce((s, f) => s + Math.min(f.cantidad_fraccionada, Math.max(0, f.cantidad_objetivo)), 0)
         const pct        = objetivo > 0 ? Math.round(100 * hecho / objetivo) : 0
-        const terminado  = hecho >= objetivo
+        const terminado  = sinDefinir === 0 && objetivo > 0 && hecho >= objetivo
         const dias       = b.fecha ? Math.floor((Date.now() - new Date(b.fecha).getTime()) / 86400000) : null
 
         return (
@@ -176,8 +205,14 @@ export function TrabajoPendiente() {
                     {dias !== null && dias > 0 && <> · hace {dias} día{dias === 1 ? '' : 's'}</>}
                   </p>
                 </div>
-                <span className={`text-xs font-semibold shrink-0 ${terminado ? 'text-emerald-700' : 'text-zinc-600'}`}>
-                  {terminado ? '✓ Fraccionado completo' : `${hecho} de ${objetivo} unidades`}
+                <span className={`text-xs font-semibold shrink-0 ${
+                  terminado ? 'text-emerald-700' : sinDefinir > 0 ? 'text-amber-700' : 'text-zinc-600'
+                }`}>
+                  {terminado
+                    ? '✓ Fraccionado completo'
+                    : sinDefinir > 0
+                    ? `Falta definir ${sinDefinir} producto${sinDefinir === 1 ? '' : 's'}`
+                    : `${hecho} de ${objetivo} unidades`}
                 </span>
               </div>
               <Progress value={pct} className="mt-2 h-1.5" />
@@ -185,7 +220,36 @@ export function TrabajoPendiente() {
 
             <div className="divide-y divide-zinc-100">
               {b.filas.map(f => {
-                const falta = Math.max(0, f.cantidad_objetivo - f.cantidad_fraccionada)
+                const definido = f.cantidad_objetivo > 0
+                const falta = definido ? Math.max(0, f.cantidad_objetivo - f.cantidad_fraccionada) : 0
+
+                // Sin objetivo no se puede registrar avance: primero hay que
+                // decir cuántas unidades salen del bulto.
+                if (!definido) {
+                  return (
+                    <div key={f.id} className="flex items-center gap-3 px-4 py-2.5 flex-wrap bg-amber-50/50">
+                      <div className="flex-1 min-w-[180px]">
+                        <p className="text-sm text-zinc-800 leading-snug">{f.nombre}</p>
+                        <p className="text-xs text-zinc-400 font-mono">{f.sku}</p>
+                      </div>
+                      <span className="text-xs text-amber-800 shrink-0">¿Cuántas unidades salen?</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Input
+                          type="number" min={1}
+                          placeholder="Ej: 33"
+                          className="w-24 h-8"
+                          value={borrador[`obj:${f.id}`] ?? ''}
+                          onChange={e => setBorrador(b2 => ({ ...b2, [`obj:${f.id}`]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') definirObjetivo(f) }}
+                        />
+                        <Button size="sm" variant="outline" disabled={guardando === f.id} onClick={() => definirObjetivo(f)}>
+                          {guardando === f.id ? 'Guardando...' : 'Definir'}
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                }
+
                 return (
                   <div key={f.id} className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
                     <div className="flex-1 min-w-[180px]">

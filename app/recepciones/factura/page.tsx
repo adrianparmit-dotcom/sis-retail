@@ -563,16 +563,26 @@ function GranelMapper({ productos, supplierContext, derivados, onChange, onClose
                       <button onClick={() => removeDerivado(i)}
                         className="text-xs text-red-500 hover:text-red-700">✕</button>
                     </div>
+                    {/* Sin objetivo no hay nada que seguir: la pantalla de
+                        Fraccionamiento calcula 0 de 0 y lo da por terminado.
+                        Antes decía "(opcional)" y nadie lo completaba. */}
                     <div className="mt-1 flex items-center gap-2">
-                      <label className="text-[10px] text-zinc-500">Objetivo (opcional):</label>
-                      <input type="number" min="0" step="1"
+                      <label className="text-[10px] text-zinc-500">¿Cuántas salen?</label>
+                      <input type="number" min="1" step="1"
                         value={d.cantidad_objetivo ?? ''}
                         onChange={e => updateCantidad(i, e.target.value)}
-                        className="w-20 text-right border border-zinc-200 rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-300"
+                        className={`w-20 text-right rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-300 border ${
+                          (d.cantidad_objetivo ?? 0) > 0 ? 'border-zinc-200' : 'border-amber-400 bg-amber-50'
+                        }`}
                         placeholder="—"
                       />
                       <span className="text-[10px] text-zinc-400">unidades</span>
                     </div>
+                    {(d.cantidad_objetivo ?? 0) <= 0 && (
+                      <p className="text-[10px] text-amber-700 mt-0.5">
+                        Sin esto no se puede seguir el fraccionado
+                      </p>
+                    )}
                   </div>
                 ))
               )}
@@ -2095,23 +2105,26 @@ export default function RecepcionFacturaPage() {
 
                       {/* Qty received */}
                       <td className="px-2 py-2 text-right">
+                        {/* El granel se pesa: un cajón de arándanos son 11,30 kg,
+                            no 11. Antes esto usaba parseInt y no dejaba ni tipear
+                            la coma. */}
                         {item.es_granel ? (
                           <div className="flex flex-col items-end gap-0.5">
-                            <input type="number" min="0"
+                            <input type="number" min="0" step="0.01" inputMode="decimal"
                               value={item.cantidad_recibida}
-                              onChange={e => updateItem(i, { cantidad_recibida: parseInt(e.target.value) || 0 })}
-                              className="w-16 text-right border border-emerald-300 rounded px-1 py-1 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-emerald-50"
+                              onChange={e => updateItem(i, { cantidad_recibida: parseFloat(e.target.value) || 0 })}
+                              className="w-20 text-right border border-emerald-300 rounded px-1 py-1 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-emerald-50"
                             />
-                            <span className="text-[10px] text-emerald-600">actualizar</span>
+                            <span className="text-[10px] text-emerald-600">kg recibidos</span>
                           </div>
                         ) : item.lotes.length > 0 ? (
                           <span className="inline-block w-16 text-right text-sm tabular-nums text-zinc-600 italic" title="Calculado desde lotes">
                             {item.cantidad_recibida}
                           </span>
                         ) : (
-                          <input type="number" min="0"
+                          <input type="number" min="0" step="1"
                             value={item.cantidad_recibida}
-                            onChange={e => updateItem(i, { cantidad_recibida: parseInt(e.target.value) || 0 })}
+                            onChange={e => updateItem(i, { cantidad_recibida: parseFloat(e.target.value) || 0 })}
                             className="w-16 text-right border border-zinc-200 rounded px-1 py-1 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-zinc-400"
                           />
                         )}
