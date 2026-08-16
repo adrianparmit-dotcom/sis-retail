@@ -70,6 +70,7 @@ export default function ProveedoresConfigPage() {
       fetchAllFromView<{ proveedor_nombre: string | null }>('productos', {
         select: 'proveedor_nombre',
         filters: [{ column: 'proveedor_nombre', operator: 'not.is', value: null }],
+        order: { column: 'id' }, // orden único: sin esto la paginación duplica y pierde filas
       }),
       supabase.from('v_proveedores_sin_config').select('proveedor_nombre'),
     ])

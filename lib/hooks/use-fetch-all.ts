@@ -9,6 +9,15 @@ import { supabase } from '@/lib/supabase'
  * IMPORTANTE: PostgREST corta cada request en ~1000 filas, así que cualquier
  * tabla/vista que pueda superar eso (productos ~3200, vistas de compras ~3800)
  * DEBE leerse con este helper y no con un .select() directo.
+ *
+ * ⚠️ SIEMPRE pasar `order` por una columna ÚNICA cuando el resultado pueda
+ * superar las 1000 filas. Cada página es un query independiente: si el orden
+ * no es determinístico, Postgres puede devolver las filas empatadas en distinto
+ * orden en cada pedido, y entonces algunas aparecen DUPLICADAS y otras se
+ * PIERDEN. No alcanza con que la vista traiga su propio ORDER BY: si ese orden
+ * empata (ej. v_compras_inteligentes_v4 empata 3188 filas en ventas_30d=0),
+ * el problema aparece igual. Ordenar por PK (`id`) o por `sku`, o agregar una
+ * columna de desempate al final (ej. `[{sku}, {location_id}]`).
  */
 
 export interface FetchAllFilter {
@@ -75,6 +84,17 @@ export async function fetchAllFromView<T = any>(
     if (!data || data.length === 0) break
     results.push(...(data as unknown as T[]))
     if (data.length < batchSize) break
+
+    // Se necesita más de una página: sin orden determinístico el resultado
+    // vendría con filas repetidas y otras faltantes. Avisar en desarrollo.
+    if (orders.length === 0 && process.env.NODE_ENV === 'development') {
+      console.warn(
+        `[fetchAllFromView] "${viewName}" supera ${batchSize} filas y se está ` +
+        'paginando SIN "order". El resultado puede traer duplicados y perder ' +
+        'filas. Pasar order por una columna única (id/sku).',
+      )
+    }
+
     from += batchSize
   }
 

@@ -33,7 +33,8 @@ export default function SinProveedorPage() {
         fetchAllFromView<ProductoSinProveedor>('productos', {
           select: 'id,sku,nombre,categoria,proveedor_nombre',
           filters: [{ column: '', operator: 'or', value: 'proveedor_nombre.is.null,proveedor_nombre.eq.' }],
-          order: [{ column: 'categoria', nullsFirst: false }, { column: 'nombre' }],
+          // `id` al final desempata: categoria+nombre puede repetirse.
+          order: [{ column: 'categoria', nullsFirst: false }, { column: 'nombre' }, { column: 'id' }],
         }),
         fetchAllFromView<{ proveedor_nombre: string | null }>('productos', {
           select: 'proveedor_nombre',
@@ -41,6 +42,7 @@ export default function SinProveedorPage() {
             { column: 'proveedor_nombre', operator: 'not.is', value: null },
             { column: 'proveedor_nombre', operator: 'neq', value: '' },
           ],
+          order: { column: 'id' }, // orden único: sin esto la paginación duplica y pierde filas
         }),
       ])
       setProductos(sinProv)
