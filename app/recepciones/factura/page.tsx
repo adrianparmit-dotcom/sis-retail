@@ -1245,6 +1245,34 @@ export default function RecepcionFacturaPage() {
 
   const confirmar = useCallback(async () => {
     if (!factura) return
+
+    // Guarda contra pérdida silenciosa de fechas: los vencimientos exigen
+    // producto_id, así que un ítem con fecha cargada pero sin producto asignado
+    // se descartaba al confirmar sin avisar nada (auditoría ago-2026: 25 ítems
+    // perdidos en 4 recepciones ya confirmadas). Se bloquea antes de guardar.
+    const sinProducto = items.filter(i => {
+      if (i.producto_id) return false
+      // El granel queda afuera a propósito: por diseño nunca tiene producto_id
+      // (deriva en N SKUs vía recepcion_item_fraccionamiento), así que bloquearlo
+      // dejaría a la operaria sin salida. Su vencimiento hoy tampoco se guarda
+      // — eso se resuelve junto con la auditoría de fraccionamiento.
+      if (i.es_granel) return false
+      const tieneFecha = i.lotes.length > 0
+        ? i.lotes.some(l => l.fecha_vencimiento && l.cantidad > 0)
+        : Boolean(i.fecha_vencimiento)
+      return tieneFecha
+    })
+    if (sinProducto.length > 0) {
+      const detalle = sinProducto.slice(0, 3).map(i => i.descripcion_proveedor).join(', ')
+      const resto = sinProducto.length > 3 ? ` y ${sinProducto.length - 3} más` : ''
+      toast.error(
+        `${sinProducto.length} ${sinProducto.length === 1 ? 'ítem tiene' : 'ítems tienen'} fecha de vencimiento pero no tienen producto asignado: ${detalle}${resto}. ` +
+        'Asignales el producto o borrales la fecha — si confirmás así, esa fecha se pierde.',
+        { duration: 10000 },
+      )
+      return
+    }
+
     setSaving(true)
     setDuxError(null)
     try {
