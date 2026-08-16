@@ -49,6 +49,10 @@ interface Bulto {
   proveedor  : string | null
   fecha      : string | null
   kgRecibidos: number
+  /** Vencimiento impreso en el envase del bulto. Lo heredan los paquetes. */
+  venceMadre : string | null
+  estado     : string
+  mermaGramos: number | null
   tandas     : Tanda[]
 }
 
@@ -79,13 +83,15 @@ export function TrabajoPendiente() {
     // Bultos = renglones de recepciones confirmadas marcados como granel.
     const { data: itemsDb } = await supabase
       .from('recepcion_items')
-      .select('id, descripcion_proveedor, cantidad_recibida, cantidad_esperada, recepciones!inner(estado, fecha_recepcion, proveedor_nombre)')
+      .select('id, descripcion_proveedor, cantidad_recibida, cantidad_esperada, fecha_vencimiento, fraccionado_estado, merma_gramos, recepciones!inner(estado, fecha_recepcion, proveedor_nombre)')
       .eq('es_granel', true)
       .eq('recepciones.estado', 'confirmada')
 
     type ItemDb = {
       id: string; descripcion_proveedor: string | null
       cantidad_recibida: number | null; cantidad_esperada: number | null
+      fecha_vencimiento: string | null
+      fraccionado_estado: string | null; merma_gramos: number | null
       recepciones: { fecha_recepcion: string | null; proveedor_nombre: string | null } | null
     }
     const items = (itemsDb as unknown as ItemDb[]) ?? []
@@ -111,14 +117,17 @@ export function TrabajoPendiente() {
       proveedor  : i.recepciones?.proveedor_nombre ?? null,
       fecha      : i.recepciones?.fecha_recepcion ?? null,
       kgRecibidos: Number(i.cantidad_recibida ?? i.cantidad_esperada ?? 0),
+      venceMadre : i.fecha_vencimiento,
+      estado     : i.fraccionado_estado ?? 'pendiente',
+      mermaGramos: i.merma_gramos == null ? null : Number(i.merma_gramos),
       tandas     : (porItem.get(i.id) ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at)),
     }))
 
-    // Los que tienen trabajo sin registrar primero, y dentro de esos el más viejo
-    // arriba: es el que lleva más días a medio embolsar.
+    // Los cerrados abajo. Entre los abiertos, primero el más viejo: es el que
+    // lleva más días a medio embolsar.
     lista.sort((a, b) => {
-      const va = a.tandas.length === 0, vb = b.tandas.length === 0
-      if (va !== vb) return va ? -1 : 1
+      const ca = a.estado === 'terminado', cb = b.estado === 'terminado'
+      if (ca !== cb) return ca ? 1 : -1
       return (a.fecha ?? '').localeCompare(b.fecha ?? '')
     })
 
@@ -136,9 +145,46 @@ export function TrabajoPendiente() {
     return productos.filter(p => matchesQuery(fBusqueda, p.nombre, p.sku)).slice(0, 8)
   }, [fBusqueda, productos])
 
-  function abrir(itemId: string) {
-    setAbierto(a => a === itemId ? null : itemId)
-    setFProducto(''); setFBusqueda(''); setFCantidad(''); setFVence(''); setFLote('')
+  function abrir(b: Bulto) {
+    const cerrando = abierto === b.itemId
+    setAbierto(cerrando ? null : b.itemId)
+    setFProducto(''); setFBusqueda(''); setFCantidad(''); setFLote('')
+    // La fecha del bulto se hereda: los paquetes vencen cuando vence la
+    // mercadería, no cuando se embolsaron. Igual queda editable.
+    setFVence(cerrando ? '' : (b.venceMadre ?? ''))
+  }
+
+  /** Cierra el bulto y guarda la merma: lo que entró menos lo embolsado. */
+  async function cerrarBulto(b: Bulto, gramosHechos: number) {
+    const gramosTotales = b.kgRecibidos * 1000
+    const merma = Math.round(gramosTotales - gramosHechos)
+    const detalle = merma >= 0
+      ? `Se registra una merma de ${formatNum(merma, 0)} g.`
+      : `Salieron ${formatNum(-merma, 0)} g MÁS de lo que entró — revisá las cantidades.`
+    if (!window.confirm(
+      `Cerrar "${b.descripcion}"\n\n` +
+      `Entraron ${formatNum(b.kgRecibidos, 2)} kg y se embolsaron ${formatNum(gramosHechos / 1000, 2)} kg.\n` +
+      `${detalle}\n\nUna vez cerrado no se cargan más tandas.`
+    )) return
+
+    const { error } = await supabase.from('recepcion_items').update({
+      fraccionado_estado    : 'terminado',
+      fraccionado_cerrado_at: new Date().toISOString(),
+      merma_gramos          : merma,
+    }).eq('id', b.itemId)
+    if (error) { toast.error('No se pudo cerrar: ' + error.message); return }
+    toast.success(`Bulto terminado — merma ${formatNum(merma, 0)} g`)
+    setAbierto(null)
+    cargar()
+  }
+
+  async function reabrirBulto(b: Bulto) {
+    const { error } = await supabase.from('recepcion_items').update({
+      fraccionado_estado: 'pendiente', fraccionado_cerrado_at: null, merma_gramos: null,
+    }).eq('id', b.itemId)
+    if (error) { toast.error('No se pudo reabrir: ' + error.message); return }
+    toast.success('Bulto reabierto')
+    cargar()
   }
 
   async function registrarTanda(b: Bulto) {
@@ -214,8 +260,32 @@ export function TrabajoPendiente() {
     )
   }
 
+  // Informe de bultos: cuántos hay, cuántos cerrados y cuánta merma acumulada.
+  const resumen = bultos.reduce((acc, b) => {
+    acc.total++
+    if (b.estado === 'terminado') { acc.cerrados++; acc.merma += b.mermaGramos ?? 0 }
+    else acc.abiertos++
+    acc.kg += b.kgRecibidos
+    return acc
+  }, { total: 0, cerrados: 0, abiertos: 0, kg: 0, merma: 0 })
+
   return (
     <div className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: 'Bultos', valor: formatNum(resumen.total), sub: `${formatNum(resumen.kg, 2)} kg recibidos` },
+          { label: 'A fraccionar', valor: formatNum(resumen.abiertos), sub: 'abiertos' },
+          { label: 'Terminados', valor: formatNum(resumen.cerrados), sub: 'cerrados' },
+          { label: 'Merma', valor: `${formatNum(resumen.merma / 1000, 2)} kg`, sub: 'de los cerrados' },
+        ].map(k => (
+          <div key={k.label} className="rounded-lg border border-zinc-200 bg-white px-3 py-2">
+            <p className="text-[11px] text-zinc-500">{k.label}</p>
+            <p className="text-lg font-bold text-zinc-900 tabular-nums leading-tight">{k.valor}</p>
+            <p className="text-[10px] text-zinc-400">{k.sub}</p>
+          </div>
+        ))}
+      </div>
+
       {bultos.map(b => {
         const gramosHechos = b.tandas.reduce((s, t) =>
           s + t.cantidad_fraccionada * gramosPorUnidad(prodMap.get(t.producto_final_id)), 0)
@@ -224,12 +294,15 @@ export function TrabajoPendiente() {
         const restanKg = Math.max(0, (gramosTotales - gramosHechos) / 1000)
         const dias = b.fecha ? Math.floor((Date.now() - new Date(b.fecha).getTime()) / 86400000) : null
         const estaAbierto = abierto === b.itemId
+        const cerrado = b.estado === 'terminado'
 
         return (
-          <div key={b.itemId} className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
+          <div key={b.itemId} className={`rounded-xl border bg-white overflow-hidden ${
+            cerrado ? 'border-emerald-200' : 'border-zinc-200'
+          }`}>
             <button
-              onClick={() => abrir(b.itemId)}
-              className="w-full text-left px-4 py-3 hover:bg-zinc-50 transition-colors"
+              onClick={() => abrir(b)}
+              className={`w-full text-left px-4 py-3 transition-colors ${cerrado ? 'bg-emerald-50/40 hover:bg-emerald-50' : 'hover:bg-zinc-50'}`}
             >
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div className="min-w-0">
@@ -241,14 +314,16 @@ export function TrabajoPendiente() {
                   </p>
                 </div>
                 <div className="text-right shrink-0">
-                  <span className={`text-xs font-semibold ${pct >= 100 ? 'text-emerald-700' : 'text-zinc-600'}`}>
-                    {b.tandas.length === 0
-                      ? 'Sin fraccionar'
-                      : pct >= 100 ? '✓ Bulto terminado' : `${pct}% embolsado`}
+                  <span className={`text-xs font-semibold ${cerrado ? 'text-emerald-700' : 'text-zinc-600'}`}>
+                    {cerrado
+                      ? '✓ Terminado'
+                      : b.tandas.length === 0 ? 'Sin fraccionar' : `${pct}% embolsado`}
                   </span>
                   {b.kgRecibidos > 0 && (
                     <p className="text-[11px] text-zinc-400 mt-0.5 tabular-nums">
-                      {formatNum(b.kgRecibidos, 2)} kg · restan {formatNum(restanKg, 2)} kg
+                      {cerrado
+                        ? `merma ${formatNum((b.mermaGramos ?? 0) / 1000, 2)} kg`
+                        : `${formatNum(b.kgRecibidos, 2)} kg · restan ${formatNum(restanKg, 2)} kg`}
                     </p>
                   )}
                 </div>
@@ -278,6 +353,19 @@ export function TrabajoPendiente() {
                   </div>
                 )}
 
+                {cerrado ? (
+                  <div className="bg-white rounded-lg border border-emerald-200 p-3 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="text-xs text-zinc-700">
+                      <p className="font-semibold text-emerald-800">Bulto terminado</p>
+                      <p className="text-zinc-500 mt-0.5 tabular-nums">
+                        Entraron {formatNum(b.kgRecibidos, 2)} kg · se embolsaron {formatNum(gramosHechos / 1000, 2)} kg ·
+                        merma {formatNum((b.mermaGramos ?? 0) / 1000, 2)} kg
+                      </p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => reabrirBulto(b)}>Reabrir</Button>
+                  </div>
+                ) : (
+                <>
                 {/* Alta de tanda */}
                 <div className="bg-white rounded-lg border border-zinc-200 p-3 space-y-2.5">
                   <p className="text-xs font-semibold text-zinc-700">Registrar lo que se embolsó</p>
@@ -357,6 +445,21 @@ export function TrabajoPendiente() {
                     {guardando ? 'Guardando...' : 'Registrar fraccionado'}
                   </Button>
                 </div>
+
+                {/* Cierre del bulto: acá se calcula y guarda la merma. */}
+                {b.tandas.length > 0 && (
+                  <div className="flex items-center justify-between gap-3 flex-wrap pt-1">
+                    <p className="text-[11px] text-zinc-500">
+                      Cuando termines el bulto completo, cerralo: se guarda la merma
+                      ({formatNum(Math.max(0, gramosTotales - gramosHechos), 0)} g por ahora).
+                    </p>
+                    <Button size="sm" variant="outline" onClick={() => cerrarBulto(b, gramosHechos)}>
+                      Marcar bulto terminado
+                    </Button>
+                  </div>
+                )}
+                </>
+                )}
               </div>
             )}
           </div>

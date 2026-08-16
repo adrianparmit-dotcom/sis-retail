@@ -2120,8 +2120,15 @@ export default function RecepcionFacturaPage() {
 
                       {/* Expiry — single date or multi-lot */}
                       <td className="px-2 py-2 relative align-top">
+                        {/* El bulto sí lleva su fecha: viene impresa en el envase
+                            del proveedor y es la que después heredan los paquetes
+                            fraccionados. Antes decía "en fraccionamiento" y el
+                            dato se perdía. */}
                         {item.es_granel ? (
-                          <span className="text-[10px] text-emerald-600 italic">en fraccionamiento</span>
+                          <div className="flex flex-col gap-0.5">
+                            <DateSelector value={item.fecha_vencimiento} onChange={v => updateItem(i, { fecha_vencimiento: v })} />
+                            <span className="text-[10px] text-emerald-600">del bulto — se hereda al fraccionar</span>
+                          </div>
                         ) : item.lotes.length === 0 ? (
                           <div className="flex flex-col gap-1">
                             <DateSelector value={item.fecha_vencimiento} onChange={v => updateItem(i, { fecha_vencimiento: v })} />
