@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import type { ReposicionItem } from '@/lib/types'
 import { matchesQuery } from '@/lib/search'
+import { toTitleCase } from '@/lib/format'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -403,9 +404,11 @@ export default function ReposicionPage() {
                         key={r.producto_id}
                         className={`hover:bg-zinc-50 ${scanHighlight === r.producto_id ? 'bg-amber-50 ring-1 ring-inset ring-amber-300' : ''}`}
                       >
-                        <TableCell>
-                          <div className="font-medium text-sm">{r.nombre ?? r.sku}</div>
-                          <div className="text-xs text-zinc-400 font-mono">{r.sku}</div>
+                        <TableCell className="min-w-[240px] max-w-sm whitespace-normal">
+                          <div className="font-medium text-sm leading-snug line-clamp-2" title={r.nombre ?? r.sku}>
+                            {r.nombre ? toTitleCase(r.nombre) : r.sku}
+                          </div>
+                          <div className="text-xs text-zinc-400 font-mono mt-0.5">{r.sku}</div>
                           {r.categoria && <div className="text-xs text-zinc-400">{r.categoria}</div>}
                         </TableCell>
                         <TableCell className="text-right">

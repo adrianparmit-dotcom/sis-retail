@@ -682,7 +682,7 @@ function CargaRapidaContent() {
                     className="w-full text-left px-3 py-2.5 hover:bg-zinc-50 transition-colors flex items-center justify-between gap-3"
                   >
                     <div className="min-w-0">
-                      <span className="text-sm font-medium text-zinc-800 block truncate">{p.nombre ?? p.sku}</span>
+                      <span className="text-sm font-medium text-zinc-800 block line-clamp-2 leading-snug" title={p.nombre ?? p.sku}>{p.nombre ?? p.sku}</span>
                       <span className="text-xs text-zinc-400 font-mono">{p.sku}</span>
                       {p.categoria && <span className="text-xs text-zinc-400 ml-2">{p.categoria}</span>}
                     </div>

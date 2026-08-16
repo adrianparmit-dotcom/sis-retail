@@ -472,7 +472,11 @@ export default function FraccionamientoPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-zinc-500">{(h as unknown as Record<string, unknown>).usuario as string ?? '—'}</TableCell>
-                    <TableCell className="text-xs text-zinc-400 max-w-xs truncate">{h.observaciones ?? '—'}</TableCell>
+                    <TableCell className="text-xs text-zinc-400 max-w-xs whitespace-normal">
+                      <span className="leading-snug line-clamp-2" title={h.observaciones ?? undefined}>
+                        {h.observaciones ?? '—'}
+                      </span>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

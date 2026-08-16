@@ -19,7 +19,7 @@ import { Pagination } from '@/components/ui/pagination'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { usePagination } from '@/lib/hooks/use-pagination'
 import { useBarcodeScan } from '@/lib/hooks/use-barcode-scan'
-import { hoyISO } from '@/lib/format'
+import { hoyISO, toTitleCase } from '@/lib/format'
 import { estadoVencimiento } from '@/lib/vencimientos'
 import { ErrorBanner } from '@/components/ui/error-banner'
 
@@ -378,9 +378,11 @@ export default function VencimientosPage() {
                         key={v.lote_id}
                         className={`hover:bg-zinc-50 ${scanHighlight === v.producto_id ? 'bg-amber-50 ring-1 ring-inset ring-amber-300' : ''}`}
                       >
-                        <TableCell>
-                          <div className="font-medium text-sm">{v.nombre ?? v.sku}</div>
-                          <div className="text-xs text-zinc-400 font-mono">{v.sku}</div>
+                        <TableCell className="min-w-[240px] max-w-sm whitespace-normal">
+                          <div className="font-medium text-sm leading-snug line-clamp-2" title={v.nombre ?? v.sku}>
+                            {v.nombre ? toTitleCase(v.nombre) : v.sku}
+                          </div>
+                          <div className="text-xs text-zinc-400 font-mono mt-0.5">{v.sku}</div>
                         </TableCell>
                         <TableCell className="text-xs text-zinc-500">{v.categoria ?? '—'}</TableCell>
                         <TableCell className="text-sm">{v.sucursal}</TableCell>
@@ -395,7 +397,8 @@ export default function VencimientosPage() {
                               v.dias_para_vencer <= 7 ? 'text-red-500 font-semibold' :
                               'text-zinc-600'
                             }>
-                              {v.dias_para_vencer < 0 ? `+${Math.abs(v.dias_para_vencer)}d` : `${v.dias_para_vencer}d`}
+                              {/* Vencido va en negativo: "+32d" se leía como "le quedan 32 días". */}
+                              {`${v.dias_para_vencer}d`}
                             </span>
                           )}
                         </TableCell>
@@ -451,9 +454,11 @@ export default function VencimientosPage() {
                         key={p.id}
                         className={`hover:bg-zinc-50 ${scanHighlight === p.id ? 'bg-amber-50 ring-1 ring-inset ring-amber-300' : ''}`}
                       >
-                        <TableCell>
-                          <div className="font-medium text-sm">{p.nombre ?? p.sku}</div>
-                          <div className="text-xs text-zinc-400 font-mono">{p.sku}</div>
+                        <TableCell className="min-w-[240px] max-w-sm whitespace-normal">
+                          <div className="font-medium text-sm leading-snug line-clamp-2" title={p.nombre ?? p.sku}>
+                            {p.nombre ? toTitleCase(p.nombre) : p.sku}
+                          </div>
+                          <div className="text-xs text-zinc-400 font-mono mt-0.5">{p.sku}</div>
                         </TableCell>
                         <TableCell className="text-xs text-zinc-500">{p.categoria ?? '—'}</TableCell>
                         <TableCell className="text-right tabular-nums text-sm text-zinc-500">

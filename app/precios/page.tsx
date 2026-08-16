@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Printer, Search, X, TrendingUp, Eye, RefreshCw, Tag, Download, CheckSquare, Square } from 'lucide-react'
 import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
 import { matchesQuery } from '@/lib/search'
+import { toTitleCase } from '@/lib/format'
 
 // ─── Types ───────────────────────────────────────────────────────────
 interface Producto {
@@ -48,15 +49,7 @@ type Sucursal = 'soho1' | 'soho2'
 type Tab = 'etiquetas' | 'aumentos'
 
 // ─── Utils ───────────────────────────────────────────────────────────
-const MINOR_WORDS = new Set(['de','del','la','las','el','los','con','sin','por','y','e','a','en','al','x','o','u'])
-
-function toTitleCase(str: string): string {
-  return str.toLowerCase().split(' ').map((w, i) =>
-    w.length === 0 ? w : (!MINOR_WORDS.has(w) || i === 0)
-      ? w.charAt(0).toUpperCase() + w.slice(1)
-      : w
-  ).join(' ')
-}
+// `toTitleCase` vive en @/lib/format — lo comparten /compras y /precios.
 
 // Splits "ACEITE DE COCO NEUTRO 200ML ENTRENUTS" →
 //   titulo: "Aceite de Coco Neutro"
@@ -385,7 +378,9 @@ export default function PreciosPage() {
                                 : <Square size={15} className="text-zinc-300" />}
                             </TableCell>
                             <TableCell className="font-mono text-xs text-zinc-400">{p.sku}</TableCell>
-                            <TableCell className="text-sm font-medium max-w-72 truncate">{toTitleCase(p.nombre)}</TableCell>
+                            <TableCell className="text-sm font-medium max-w-72 whitespace-normal">
+                              <span className="line-clamp-2 leading-snug" title={toTitleCase(p.nombre)}>{toTitleCase(p.nombre)}</span>
+                            </TableCell>
                             <TableCell className="text-xs text-zinc-500">{p.categoria ?? '—'}</TableCell>
                             <TableCell className="text-right text-sm">{sucursal === 'soho1' ? p.stock_soho1 : p.stock_soho2}</TableCell>
                             <TableCell className="text-right font-bold text-sm text-blue-900">{fmt$(p.precio_venta)}</TableCell>
@@ -502,7 +497,9 @@ export default function PreciosPage() {
                           </div>
                         </TableCell>
                         <TableCell className="font-mono text-xs text-zinc-400">{c.sku}</TableCell>
-                        <TableCell className="text-sm font-medium max-w-60 truncate">{toTitleCase(c.nombre)}</TableCell>
+                        <TableCell className="text-sm font-medium max-w-60 whitespace-normal">
+                          <span className="line-clamp-2 leading-snug" title={toTitleCase(c.nombre)}>{toTitleCase(c.nombre)}</span>
+                        </TableCell>
                         <TableCell className="text-right text-sm text-zinc-500">{fmt$(c.precio_anterior)}</TableCell>
                         <TableCell className="text-right text-sm font-semibold">{fmt$(c.precio_nuevo)}</TableCell>
                         <TableCell className="text-right">

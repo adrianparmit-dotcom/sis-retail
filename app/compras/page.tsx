@@ -17,6 +17,7 @@ import { usePagination } from '@/lib/hooks/use-pagination'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { useBarcodeScan } from '@/lib/hooks/use-barcode-scan'
 import { INVERSION_ALERTA_PESOS, REACTIVACION_UNIDADES } from '@/lib/constants'
+import { toTitleCase } from '@/lib/format'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import {
   Download, FileText, ChevronUp, ChevronDown, ChevronsUpDown, AlertTriangle,
@@ -439,13 +440,18 @@ export default function ComprasPage() {
 
   return (
     <TooltipProvider>
-    <div className="p-6 space-y-6">
+    <div className="p-6 md:p-8 space-y-6">
 
       {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-zinc-900">Dashboard de Compras</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">Comprador Inteligente — demanda estacional + quiebres + vencimientos</p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-indigo-50 flex items-center justify-center shrink-0">
+            <ShoppingCart size={18} className="text-indigo-600" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">Dashboard de Compras</h1>
+            <p className="text-sm text-zinc-500 mt-0.5">Comprador Inteligente — demanda estacional + quiebres + vencimientos</p>
+          </div>
         </div>
         <Link href="/compras/proveedores">
           <Button variant="outline" size="sm" className="flex items-center gap-1.5">
@@ -459,8 +465,10 @@ export default function ComprasPage() {
       {loadError && <ErrorBanner onRetry={() => { setLoading(true); setReloadKey(k => k + 1) }} />}
 
       {alertasHoy.length > 0 && (
-        <div className="rounded-md bg-indigo-50 border border-indigo-200 px-4 py-3 text-sm text-indigo-800 flex items-start gap-2">
-          <Bell size={15} className="mt-0.5 shrink-0 text-indigo-500" />
+        <div className="rounded-2xl bg-indigo-50/70 border border-indigo-200 px-4 py-3.5 text-sm text-indigo-900 shadow-sm flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl bg-indigo-100 flex items-center justify-center shrink-0">
+            <Bell size={15} className="text-indigo-600" />
+          </div>
           <div>
             <span className="font-semibold">Pedidos a realizar hoy · </span>
             {alertasHoy.join(' · ')}
@@ -469,7 +477,10 @@ export default function ComprasPage() {
       )}
 
       {lastSync === null && (
-        <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+        <div className="rounded-2xl bg-amber-50/70 border border-amber-200 px-4 py-3.5 text-sm text-amber-900 shadow-sm flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
+            <RefreshCw size={14} className="text-amber-600" />
+          </div>
           Stock pendiente de sincronización con Dux — los datos se actualizarán en la próxima ventana automática.
         </div>
       )}
@@ -477,25 +488,32 @@ export default function ComprasPage() {
       {!loading && negativos.length > 0 && (
         <button type="button"
           onClick={() => setCobertura(c => c === 'negativo' ? 'urgente' : 'negativo')}
-          className={`w-full text-left rounded-md border px-4 py-3 text-sm transition-colors ${
+          className={`w-full text-left rounded-2xl border px-4 py-3.5 text-sm shadow-sm transition-colors flex items-center gap-3 ${
             cobertura === 'negativo'
-              ? 'bg-red-100 border-red-400 text-red-900'
-              : 'bg-red-50 border-red-300 text-red-800 hover:bg-red-100'
+              ? 'bg-red-100/80 border-red-300 text-red-950'
+              : 'bg-red-50/70 border-red-200 text-red-900 hover:bg-red-100/60'
           }`}>
-          <strong>⚠ {negativos.length} producto{negativos.length > 1 ? 's' : ''} con stock negativo</strong>
-          {' '}— posible error de conteo en Dux. SKUs:{' '}
-          <span className="font-mono text-xs">
-            {negativos.slice(0, 12).map(p => p.sku).join(', ')}
-            {negativos.length > 12 && ` y ${negativos.length - 12} más`}
+          <div className="w-8 h-8 rounded-xl bg-red-100 flex items-center justify-center shrink-0">
+            <AlertTriangle size={15} className="text-red-600" />
+          </div>
+          <span>
+            <strong>{negativos.length} producto{negativos.length > 1 ? 's' : ''} con stock negativo</strong>
+            {' '}— posible error de conteo en Dux. SKUs:{' '}
+            <span className="font-mono text-xs">
+              {negativos.slice(0, 12).map(p => p.sku).join(', ')}
+              {negativos.length > 12 && ` y ${negativos.length - 12} más`}
+            </span>
+            {cobertura !== 'negativo' && <span className="ml-2 underline text-xs whitespace-nowrap">→ Ver informe</span>}
+            {cobertura === 'negativo' && <span className="ml-2 underline text-xs whitespace-nowrap">→ Volver a urgentes</span>}
           </span>
-          {cobertura !== 'negativo' && <span className="ml-2 underline text-xs">→ Ver informe</span>}
-          {cobertura === 'negativo' && <span className="ml-2 underline text-xs">→ Volver a urgentes</span>}
         </button>
       )}
 
       {!loading && alertas > 0 && (
-        <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+        <div className="rounded-2xl bg-amber-50/70 border border-amber-200 px-4 py-3.5 text-sm text-amber-900 shadow-sm flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
+            <AlertTriangle size={15} className="text-amber-600" />
+          </div>
           <span>
             <strong>{alertas} producto{alertas > 1 ? 's' : ''} con inversión &gt;${(INVERSION_ALERTA_PESOS / 1000).toFixed(0)}k</strong> — probable inconsistencia en costo unitario. Excluidos del total. Marcados con ⚠ en la tabla.
           </span>
@@ -533,7 +551,7 @@ export default function ComprasPage() {
       )}
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
           <Input
@@ -606,17 +624,21 @@ export default function ComprasPage() {
       </div>
 
       {cobertura === 'sinventa' && (
-        <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-2 text-sm text-blue-800">
-          Productos sin stock y sin ventas en 30 días. Pedido mínimo de reactivación: <strong>{REACTIVACION_UNIDADES.GLOBAL} unidades</strong> (pedido global) o <strong>{REACTIVACION_UNIDADES.SUCURSAL} por sucursal</strong> (proveedores por sucursal).
+        <div className="rounded-2xl bg-sky-50/70 border border-sky-200 px-4 py-3 text-sm text-sky-900 flex items-start gap-2.5">
+          <Info size={15} className="mt-0.5 shrink-0 text-sky-500" />
+          <span>
+            Productos sin stock y sin ventas en 30 días. Pedido mínimo de reactivación: <strong>{REACTIVACION_UNIDADES.GLOBAL} unidades</strong> (pedido global) o <strong>{REACTIVACION_UNIDADES.SUCURSAL} por sucursal</strong> (proveedores por sucursal).
+          </span>
         </div>
       )}
       {cobertura === 'negativo' && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-800">
+        <div className="rounded-2xl bg-red-50/70 border border-red-200 px-4 py-3 text-sm text-red-900 flex items-start gap-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-red-500" />
           Productos con stock negativo en Dux. Revisá el conteo físico y corregí en el ERP antes de comprar.
         </div>
       )}
       {cobertura === 'quiebre' && (
-        <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-2 text-sm text-amber-800 flex items-start gap-2">
+        <div className="rounded-2xl bg-amber-50/70 border border-amber-200 px-4 py-3 text-sm text-amber-900 flex items-start gap-2.5">
           <TrendingDown size={15} className="mt-0.5 shrink-0 text-amber-600" />
           <span>
             Productos con <strong>menos de 20 días con ventas</strong> en los últimos 30 días. La demanda se calculó usando el período alternativo (días 30-60). El ⚡ en la cobertura indica quiebre.
@@ -625,11 +647,11 @@ export default function ComprasPage() {
       )}
 
       {/* Tabla */}
-      <div className="bg-white rounded-lg border overflow-hidden">
-        <div className="overflow-x-auto">
+      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto row-hover">
           <Table>
             <TableHeader>
-              <TableRow className="bg-zinc-50">
+              <TableRow className="bg-zinc-50 hover:bg-zinc-50">
                 <SortHeader label="SKU"       sk="sku"               current={sortKey} dir={sortDir} onSort={toggleSort} className="w-20" />
                 <SortHeader label="Nombre"    sk="nombre"            current={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortHeader label="Proveedor" sk="proveedor_nombre"  current={sortKey} dir={sortDir} onSort={toggleSort} />
@@ -686,22 +708,28 @@ export default function ComprasPage() {
                       className={`hover:bg-zinc-50 ${isDeadStock ? 'opacity-70' : ''} ${scanHighlight === p.id ? 'bg-amber-50 ring-1 ring-inset ring-amber-300' : ''}`}
                     >
                       <TableCell className="font-mono text-xs text-zinc-500">{p.sku}</TableCell>
-                      <TableCell className="max-w-xs">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <AbcBadge clase={abcMap.get(p.id)} />
+                      <TableCell className="min-w-[240px] max-w-sm whitespace-normal">
+                        <div className="flex items-start gap-1.5 min-w-0">
+                          <div className="pt-0.5 shrink-0"><AbcBadge clase={abcMap.get(p.id)} /></div>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <div className="font-medium text-sm truncate cursor-help">{p.nombre ?? '—'}</div>
+                              {/* Hasta 2 líneas antes de recortar, y en Título en vez de MAYÚSCULAS:
+                                  entra casi siempre el nombre completo. */}
+                              <div className="font-medium text-sm leading-snug line-clamp-2 cursor-help">
+                                {p.nombre ? toTitleCase(p.nombre) : '—'}
+                              </div>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="max-w-[520px] break-words whitespace-normal">
                               {p.nombre}
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        {p.marca && <div className="text-xs text-zinc-400">{p.marca}</div>}
+                        {p.marca && <div className="text-xs text-zinc-400 mt-0.5">{toTitleCase(p.marca)}</div>}
                       </TableCell>
-                      <TableCell className="text-xs text-zinc-500">
-                        {p.proveedor_nombre ?? <span className="text-zinc-300">—</span>}
+                      <TableCell className="text-xs text-zinc-500 max-w-[200px] whitespace-normal">
+                        {p.proveedor_nombre
+                          ? <span className="line-clamp-2 leading-snug" title={p.proveedor_nombre}>{toTitleCase(p.proveedor_nombre)}</span>
+                          : <span className="text-zinc-300">—</span>}
                       </TableCell>
                       {hasSucursalRows && (
                         <TableCell className="text-xs">

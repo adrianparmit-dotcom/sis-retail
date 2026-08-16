@@ -153,7 +153,11 @@ export default function RecepcionDetallePage() {
                 return (
                   <TableRow key={item.id} className="hover:bg-zinc-50">
                     <TableCell className="font-mono text-xs">{item.sku}</TableCell>
-                    <TableCell className="text-sm">{item.nombre_producto ?? '—'}</TableCell>
+                    <TableCell className="text-sm min-w-[220px] max-w-sm whitespace-normal">
+                      <span className="leading-snug line-clamp-2" title={item.nombre_producto ?? undefined}>
+                        {item.nombre_producto ?? '—'}
+                      </span>
+                    </TableCell>
                     <TableCell className="text-right tabular-nums text-sm">{item.cantidad_esperada}</TableCell>
                     <TableCell className="text-right tabular-nums text-sm font-medium">
                       {item.cantidad_recibida ?? '—'}
@@ -162,7 +166,11 @@ export default function RecepcionDetallePage() {
                     <TableCell className="text-center">
                       <Badge className={`${cfg.className} text-xs`}>{cfg.label}</Badge>
                     </TableCell>
-                    <TableCell className="text-xs text-zinc-400 max-w-xs truncate">{item.observacion ?? '—'}</TableCell>
+                    <TableCell className="text-xs text-zinc-400 max-w-xs whitespace-normal">
+                      <span className="leading-snug line-clamp-2" title={item.observacion ?? undefined}>
+                        {item.observacion ?? '—'}
+                      </span>
+                    </TableCell>
                   </TableRow>
                 )
               })

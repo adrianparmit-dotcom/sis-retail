@@ -138,7 +138,7 @@ export function ProductPicker({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-sm text-gray-900 truncate leading-tight">{p.nombre}</p>
+                      <p className="text-sm text-gray-900 leading-snug line-clamp-2" title={p.nombre ?? undefined}>{p.nombre}</p>
                       <p className="text-[11px] text-gray-400 mt-0.5">{p.sku} · {p.categoria}</p>
                     </div>
                     <div className="shrink-0 text-right">

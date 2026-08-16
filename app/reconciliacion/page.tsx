@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { ReconciliacionItem } from '@/lib/types'
 import { matchesQuery } from '@/lib/search'
+import { toTitleCase } from '@/lib/format'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -189,9 +190,11 @@ export default function ReconciliacionPage() {
                   const cfg = ESTADO_CONFIG[d.estado_reconciliacion]
                   return (
                     <TableRow key={d.producto_id} className="hover:bg-zinc-50">
-                      <TableCell>
-                        <div className="font-medium text-sm">{d.nombre ?? d.sku}</div>
-                        <div className="text-xs text-zinc-400 font-mono">{d.sku}</div>
+                      <TableCell className="min-w-[240px] max-w-sm whitespace-normal">
+                        <div className="font-medium text-sm leading-snug line-clamp-2" title={d.nombre ?? d.sku}>
+                          {d.nombre ? toTitleCase(d.nombre) : d.sku}
+                        </div>
+                        <div className="text-xs text-zinc-400 font-mono mt-0.5">{d.sku}</div>
                       </TableCell>
                       <TableCell className="text-xs text-zinc-500">{d.categoria ?? '—'}</TableCell>
                       <TableCell className="text-right tabular-nums font-medium">{d.stock_dux.toLocaleString('es-AR')}</TableCell>

@@ -23,6 +23,32 @@ export function formatDate(isoDate: string | null | undefined): string {
   return `${d}/${m}/${y}`
 }
 
+// Palabras que quedan en minúscula salvo que abran el nombre.
+const MINOR_WORDS = new Set(['de','del','la','las','el','los','con','sin','por','y','e','a','en','al','x','o','u'])
+
+// Siglas que NUNCA se acentúan a Título: formas societarias argentinas y
+// etiquetas de canal/rubro. Sin "Shuk SRL" terminaría como "Shuk Srl".
+// Se comparan sin puntos, así "S.R.L." entra por la misma puerta que "SRL".
+const KEEP_UPPER = new Set([
+  'SRL', 'SA', 'SAS', 'SH', 'SCA', 'SPA', 'SL',
+  'SACIF', 'SACI', 'SAIC', 'SAICF', 'SRLU',
+  'ECOM', 'TACC', 'IVA', 'CUIT', 'SKU', 'ONG',
+])
+
+/**
+ * Pasa un nombre de producto o proveedor de Dux (que viene TODO EN MAYÚSCULAS)
+ * a Título Amigable. Además de leerse mejor, ocupa menos ancho: entra más
+ * texto antes de que la celda tenga que recortar.
+ */
+export function toTitleCase(str: string): string {
+  return str.toLowerCase().split(' ').map((w, i) => {
+    if (w.length === 0) return w
+    if (KEEP_UPPER.has(w.replace(/\./g, '').toUpperCase())) return w.toUpperCase()
+    if (MINOR_WORDS.has(w) && i > 0) return w
+    return w.charAt(0).toUpperCase() + w.slice(1)
+  }).join(' ')
+}
+
 /** Format a datetime string to DD/MM HH:mm */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—'

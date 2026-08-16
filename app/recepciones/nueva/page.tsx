@@ -612,8 +612,8 @@ export default function NuevaRecepcionPage() {
                     <td className="px-3 py-2 max-w-xs">
                       {item.nombre_app ? (
                         <>
-                          <div className="font-medium truncate">{item.nombre_app}</div>
-                          <div className="text-xs text-zinc-400 truncate">{item.descripcion}</div>
+                          <div className="font-medium leading-snug line-clamp-2" title={item.nombre_app}>{item.nombre_app}</div>
+                          <div className="text-xs text-zinc-400 leading-snug line-clamp-2" title={item.descripcion}>{item.descripcion}</div>
                         </>
                       ) : (
                         <div className="text-orange-600 text-xs">{item.descripcion}</div>

@@ -84,9 +84,16 @@ export function KpiCard({
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-gray-500 truncate leading-none">{label}</p>
-          <p className={cn('text-2xl font-bold mt-1.5 leading-none tracking-tight', styles.value)}>
+        <div className="min-w-0 flex-1">
+          {/* La etiqueta nunca se corta: envuelve hasta 2 líneas y reserva el alto
+              para que las tarjetas de una fila queden alineadas entre sí. */}
+          <p
+            className="text-xs font-medium text-gray-500 leading-snug text-balance min-h-8 line-clamp-2"
+            title={label}
+          >
+            {label}
+          </p>
+          <p className={cn('text-2xl font-bold mt-1 leading-none tracking-tight tabular-nums', styles.value)}>
             {typeof value === 'number' ? value.toLocaleString('es-AR') : value}
           </p>
           {sublabel && (

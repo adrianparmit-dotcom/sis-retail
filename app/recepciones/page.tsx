@@ -78,7 +78,7 @@ export default function RecepcionesPage() {
               <div key={r.id} className="flex items-center gap-4 px-4 py-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3">
-                    <span className="font-medium text-sm text-zinc-800 truncate">
+                    <span className="font-medium text-sm text-zinc-800 line-clamp-2 leading-snug" title={r.proveedor_nombre ?? undefined}>
                       {r.proveedor_nombre ?? '—'}
                     </span>
                     <span className="font-mono text-xs text-zinc-500 shrink-0">
