@@ -36,6 +36,13 @@ export async function GET(req: NextRequest) {
     if (k !== 'path' && k !== '_s') duxUrl.searchParams.set(k, v)
   })
 
+  // Dux tiene dos APIs con formatos de auth distintos:
+  //   v1 (/items, /facturas, /compras) → token crudo
+  //   v2 (/v2/...)                     → "Bearer <token>"
+  // Mandar el crudo a v2 devuelve 401 NO_AUTORIZADO ("Token ausente o mal formado").
+  const esV2 = path.startsWith('/v2/')
+  const authHeader = esV2 ? `Bearer ${DUX_TOKEN}` : DUX_TOKEN
+
   // Timeout de 30s + 1 reintento: si Dux se cuelga, el consumidor (dux-sync)
   // no debe quedar bloqueado hasta el límite del runtime y perder la ventana.
   let duxRes: Response | null = null
@@ -44,7 +51,7 @@ export async function GET(req: NextRequest) {
     if (attempt > 0) await new Promise(r => setTimeout(r, 2000))
     try {
       duxRes = await fetch(duxUrl.toString(), {
-        headers: { 'Authorization': DUX_TOKEN, 'Accept': 'application/json' },
+        headers: { 'Authorization': authHeader, 'Accept': 'application/json' },
         signal: AbortSignal.timeout(30_000),
       })
       if (duxRes.status < 500) break // 5xx de Dux: vale la pena reintentar

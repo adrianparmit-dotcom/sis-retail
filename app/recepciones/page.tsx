@@ -18,6 +18,14 @@ const ESTADO_CONFIG: Record<string, { label: string; className: string }> = {
   cancelada  : { label: 'Cancelada',  className: 'bg-zinc-100 text-zinc-500 border-zinc-200' },
 }
 
+// Cómo le fue a la compra en Dux al confirmar. Sin esto no había manera de
+// saber después si el ERP la recibió: el error solo aparecía en pantalla.
+const DUX_SYNC_CONFIG: Record<string, { label: string; className: string; title: string }> = {
+  ok      : { label: 'En Dux',      className: 'bg-emerald-50 text-emerald-700 border-emerald-200', title: 'La compra se registró en Dux' },
+  error   : { label: 'Falló Dux',   className: 'bg-red-50 text-red-700 border-red-200',             title: 'Dux rechazó la compra — hay que cargarla a mano' },
+  omitida : { label: 'No enviada',  className: 'bg-amber-50 text-amber-700 border-amber-200',       title: 'No se intentó enviar: faltaba el SKU o el proveedor de Dux' },
+}
+
 const fmtFecha = (s: string | null) => {
   if (!s) return '—'
   const [y, m, d] = s.split('-')
@@ -153,17 +161,18 @@ export default function RecepcionesPage() {
               <TableHead>Fecha factura</TableHead>
               <TableHead>Fecha recepción</TableHead>
               <TableHead className="text-center">Estado</TableHead>
+              <TableHead className="text-center">Dux</TableHead>
               <TableHead className="text-right">Acción</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-zinc-400 py-12">Cargando...</TableCell>
+                <TableCell colSpan={7} className="text-center text-zinc-400 py-12">Cargando...</TableCell>
               </TableRow>
             ) : confirmadas.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-16">
+                <TableCell colSpan={7} className="text-center py-16">
                   <p className="text-zinc-400">No hay recepciones confirmadas</p>
                   <p className="text-xs text-zinc-400 mt-1">Cuando llegue mercadería, procesá la factura PDF desde el botón de arriba</p>
                 </TableCell>
@@ -179,6 +188,18 @@ export default function RecepcionesPage() {
                     <TableCell className="text-sm tabular-nums">{fmtFecha(r.fecha_recepcion)}</TableCell>
                     <TableCell className="text-center">
                       <Badge className={cfg.className}>{cfg.label}</Badge>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      {r.dux_sync_estado && DUX_SYNC_CONFIG[r.dux_sync_estado] ? (
+                        <Badge
+                          className={DUX_SYNC_CONFIG[r.dux_sync_estado].className}
+                          title={r.dux_sync_detalle ?? DUX_SYNC_CONFIG[r.dux_sync_estado].title}
+                        >
+                          {DUX_SYNC_CONFIG[r.dux_sync_estado].label}
+                        </Badge>
+                      ) : (
+                        <span className="text-zinc-300 text-xs" title="Recepción anterior al registro de envíos a Dux">—</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       <Link href={`/recepciones/${r.id}`}>

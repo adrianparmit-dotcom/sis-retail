@@ -64,10 +64,16 @@ export async function POST(req: NextRequest) {
   //   - cod_item (no id_item)
   //   - ctd (no cantidad)
   //   - precio_unitario (igual)
+  //   - porc_iva: alícuota de la línea. Si se omite, Dux aplica la del maestro
+  //     del ítem e ignora la que cargó la operaria en la factura.
   //   - Filtrar cant=0 o precio=0
-  //   - Mergear duplicados por cod_item
-  type ClientItem = { id_item: string; cantidad: number; precio_unitario: number }
-  type DuxItem    = { cod_item: string; ctd: number; precio_unitario: number; porc_descuento: number }
+  //   - Mergear duplicados por (cod_item + alícuota): agrupar solo por cod_item
+  //     mezclaría líneas de 21% y 10.5% en una sola con IVA equivocado.
+  type ClientItem = { id_item: string; cantidad: number; precio_unitario: number; iva_porcentaje?: number }
+  type DuxItem    = { cod_item: string; ctd: number; precio_unitario: number; porc_descuento: number; porc_iva?: number }
+
+  // Alícuotas que acepta Dux. Cualquier otra se omite y el ERP usa la del maestro.
+  const IVA_VALIDAS = new Set([0, 2.5, 10.5, 21, 27])
 
   const productosRaw = (Array.isArray(productos) ? productos : []) as ClientItem[]
 
@@ -77,24 +83,29 @@ export async function POST(req: NextRequest) {
 
   const validos = productosRaw.filter(p => p.cantidad > 0 && p.precio_unitario > 0)
 
-  // Merge duplicates by cod_item: sum ctd, weighted-average price
-  const merged = new Map<string, { ctd: number; total_valor: number }>()
+  // Merge duplicates by cod_item + IVA: sum ctd, weighted-average price
+  const merged = new Map<string, { cod_item: string; iva: number | null; ctd: number; total_valor: number }>()
   for (const p of validos) {
-    const key = String(p.id_item)
+    const iva = typeof p.iva_porcentaje === 'number' && IVA_VALIDAS.has(p.iva_porcentaje)
+      ? p.iva_porcentaje
+      : null
+    const cod = String(p.id_item)
+    const key = `${cod}__${iva ?? 'maestro'}`
     const ex  = merged.get(key)
     if (ex) {
       ex.total_valor += p.precio_unitario * p.cantidad
       ex.ctd         += p.cantidad
     } else {
-      merged.set(key, { ctd: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
+      merged.set(key, { cod_item: cod, iva, ctd: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
     }
   }
 
-  const productosFinal: DuxItem[] = Array.from(merged.entries()).map(([cod_item, v]) => ({
-    cod_item,
+  const productosFinal: DuxItem[] = Array.from(merged.values()).map(v => ({
+    cod_item       : v.cod_item,
     ctd            : v.ctd,
     precio_unitario: Math.round(v.total_valor / v.ctd * 100) / 100,
     porc_descuento : 0,
+    ...(v.iva !== null ? { porc_iva: v.iva } : {}),
   }))
 
   if (productosFinal.length === 0) {

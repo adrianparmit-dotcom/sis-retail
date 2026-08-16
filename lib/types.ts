@@ -92,6 +92,11 @@ export interface Recepcion {
   observaciones: string | null
   texto_original: string | null
   created_at: string
+  // Resultado del envío de la compra a Dux al confirmar.
+  // null = recepción anterior al registro, o todavía en borrador.
+  dux_sync_estado: 'ok' | 'error' | 'omitida' | null
+  dux_sync_at: string | null
+  dux_sync_detalle: string | null
 }
 
 export interface RecepcionItem {

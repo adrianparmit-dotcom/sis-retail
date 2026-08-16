@@ -1240,6 +1240,15 @@ export default function RecepcionFacturaPage() {
     } else {
       setDuxPayloadRetry(null)
     }
+    // El reintento también actualiza el registro: si no, una recepción que
+    // termina sincronizando bien quedaba marcada como error para siempre.
+    if (borradorId) {
+      await supabase.from('recepciones').update({
+        dux_sync_estado : err ? 'error' : 'ok',
+        dux_sync_at     : new Date().toISOString(),
+        dux_sync_detalle: err ? err.msg : null,
+      }).eq('id', borradorId)
+    }
     setRetryingDux(false)
   }
 
@@ -1458,10 +1467,23 @@ export default function RecepcionFacturaPage() {
         }
       }
 
+      // Deja constancia del envío a Dux en la recepción. Antes el resultado
+      // solo se veía en pantalla: si nadie lo miraba, no quedaba forma de saber
+      // después si la compra habia llegado al ERP.
+      const marcarSync = async (estado: 'ok' | 'error' | 'omitida', detalle?: string) => {
+        await supabase.from('recepciones').update({
+          dux_sync_estado : estado,
+          dux_sync_at     : new Date().toISOString(),
+          dux_sync_detalle: detalle ?? null,
+        }).eq('id', recId)
+      }
+
       if (duxItems.length === 0) {
         setDuxError('La compra NO se cargó en Dux: ningún ítem tiene un SKU del sistema asignado. Cargala manualmente en Dux.')
+        await marcarSync('omitida', 'Ningún ítem con SKU del sistema asignado')
       } else if (!provId) {
         setDuxError('La compra NO se cargó en Dux: no se pudo determinar el proveedor en Dux. Configuralo en /compras/proveedores → campo "ID Dux".')
+        await marcarSync('omitida', 'No se pudo determinar el proveedor en Dux')
       } else {
         const duxPayload = {
           id_sucursal     : sucursal.dux_sucursal_id,  // Dux logical branch: 1=SOHO1, 3=SOHO2
@@ -1475,6 +1497,9 @@ export default function RecepcionFacturaPage() {
             id_item         : i.producto_sku!,
             cantidad        : i.cantidad,  // siempre la cantidad de factura (Fact.), no la recibida
             precio_unitario : i.costo_unitario,
+            // Alícuota de la línea: sin esto Dux aplica la del maestro del ítem
+            // e ignora el IVA que se cargó acá (21 vs 10.5).
+            iva_porcentaje  : i.iva_porcentaje,
           })),
         }
 
@@ -1482,6 +1507,9 @@ export default function RecepcionFacturaPage() {
         if (duxRes) {
           setDuxError(duxRes.msg + (duxRes.detail ? `\n\n${duxRes.detail}` : ''))
           setDuxPayloadRetry(duxPayload)
+          await marcarSync('error', duxRes.msg)
+        } else {
+          await marcarSync('ok')
         }
       }
 
