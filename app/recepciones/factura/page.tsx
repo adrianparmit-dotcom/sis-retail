@@ -610,6 +610,11 @@ export default function RecepcionFacturaPage() {
   const [duxError, setDuxError]               = useState<string | null>(null)
   const [duxPayloadRetry, setDuxPayloadRetry] = useState<Record<string, unknown> | null>(null)
   const [retryingDux, setRetryingDux]         = useState(false)
+  // Solo true tras un reintento que Dux aceptó. Antes el cartel de éxito se
+  // mostraba con `!duxPayloadRetry`, que también es el estado inicial: cuando
+  // no había ítems con SKU nunca se intentaba enviar y la pantalla igual decía
+  // "enviado correctamente", avisando lo contrario de lo que pasó.
+  const [duxRetryOk, setDuxRetryOk]           = useState(false)
   const [priceExcelUrl, setPriceExcelUrl]     = useState<string | null>(null)
   const [priceExcelCount, setPriceExcelCount] = useState(0)
   const [transferenciaId, setTransferenciaId] = useState<string | null>(null)
@@ -1239,6 +1244,7 @@ export default function RecepcionFacturaPage() {
       setDuxError(err.msg + (err.detail ? `\n\n${err.detail}` : ''))
     } else {
       setDuxPayloadRetry(null)
+      setDuxRetryOk(true)
     }
     // El reintento también actualiza el registro: si no, una recepción que
     // termina sincronizando bien quedaba marcada como error para siempre.
@@ -2129,8 +2135,13 @@ export default function RecepcionFacturaPage() {
                   : '🔄 Reintentar envío a Dux'}
               </Button>
             )}
-            {!duxPayloadRetry && (
-              <p className="text-xs text-orange-600">✓ Enviado correctamente a Dux al reintentar.</p>
+            {duxRetryOk && (
+              <p className="text-xs text-emerald-700 font-medium">✓ Enviado correctamente a Dux al reintentar.</p>
+            )}
+            {!duxPayloadRetry && !duxRetryOk && (
+              <p className="text-xs text-orange-700 font-medium">
+                Esta compra quedó SIN registrar en Dux. Cargala a mano en el ERP.
+              </p>
             )}
           </div>
         )}
