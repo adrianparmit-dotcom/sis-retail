@@ -97,7 +97,8 @@ export function KpiCard({
             {typeof value === 'number' ? value.toLocaleString('es-AR') : value}
           </p>
           {sublabel && (
-            <p className="text-[11px] text-gray-400 mt-1.5 leading-none">{sublabel}</p>
+            // leading-snug (no leading-none): el sublabel puede envolver a 2 líneas.
+            <p className="text-[11px] text-gray-500 mt-1.5 leading-snug">{sublabel}</p>
           )}
         </div>
         {Icon && (

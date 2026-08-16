@@ -451,6 +451,16 @@ export default function ComprasPage() {
       .filter(p => (p.inversion_sugerida ?? 0) <= INVERSION_ALERTA_PESOS)
       .reduce((s, p) => s + (p.inversion_sugerida ?? 0), 0)
   , [filtered])
+  // Los productos de reactivación (sin stock y sin ventas 30d) NO traen
+  // `inversion_sugerida` de la vista, porque su sugerencia_compra es 0. Pero sí
+  // se piden — la columna "Comprar" muestra el mínimo — y el PDF los cobra.
+  // Se muestran aparte para que el KPI no los tape y el total cierre con el PDF.
+  const inversionReactivacion = useMemo(() =>
+    filtered.reduce((s, p) => {
+      if (!(p.ventas_30d === 0 && p.stock_actual === 0)) return s
+      return s + sugerenciaEfectiva(p) * (p.costo ?? 0)
+    }, 0)
+  , [filtered])
   const unidades = useMemo(() => filtered.reduce((s, p) => s + sugerenciaEfectiva(p), 0), [filtered])
   const alertas  = useMemo(() => filtered.filter(p => (p.inversion_sugerida ?? 0) > INVERSION_ALERTA_PESOS).length, [filtered])
 
@@ -563,7 +573,14 @@ export default function ComprasPage() {
             active={cobertura === 'sinventa'}
             onClick={() => setCobertura(c => c === 'sinventa' ? 'urgente' : 'sinventa')}
           />
-          <KpiCard label="Inversión sugerida"   value={fmtPeso(inversion)} variant="indigo" />
+          <KpiCard
+            label="Inversión sugerida"
+            value={fmtPeso(inversion)}
+            sublabel={inversionReactivacion > 0
+              ? `+ ${fmtPeso(inversionReactivacion)} reactivación`
+              : undefined}
+            variant="indigo"
+          />
           <KpiCard label="Unidades a comprar"   value={fmt(unidades)}    variant="default" />
         </div>
       )}

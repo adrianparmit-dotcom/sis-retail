@@ -1,4 +1,5 @@
 import type { ProductoCompra } from './types'
+import { REACTIVACION_UNIDADES } from './constants'
 
 // ─────────────────────────────────────────────────────
 // Public types — usados por el editor de orden y los exports
@@ -47,7 +48,11 @@ function sugerenciaEfectiva(p: ProductoCompra): number {
     return p.sugerencia_kg ?? 0
   }
   if (p.sugerencia_compra > 0) return p.sugerencia_compra
-  if (p.ventas_30d === 0 && p.stock_actual === 0) return 4
+  // Reactivación: 4 ud en pedido global, 2 ud por sucursal. Tenía el 4 fijo, así
+  // que en proveedores por sucursal el PDF pedía el doble de lo que mostraba la
+  // pantalla (620 filas, $7,6M de más).
+  if (p.ventas_30d === 0 && p.stock_actual === 0)
+    return p.location_id != null ? REACTIVACION_UNIDADES.SUCURSAL : REACTIVACION_UNIDADES.GLOBAL
   return 0
 }
 
