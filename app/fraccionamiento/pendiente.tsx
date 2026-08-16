@@ -1,201 +1,236 @@
 'use client'
 
 /**
- * Trabajo pendiente de fraccionar.
+ * Bultos a fraccionar.
  *
- * El bulto madre se declara en la recepción (qué SKUs finales salen de él y
- * cuántas unidades de cada uno). Pero fraccionarlo lleva 10-15 días, así que
- * durante ese tiempo el ERP ya tiene los paquetes cargados y el depósito tiene
- * mercadería a medio embolsar. Esta pantalla es ese pendiente.
+ * Al recibir solo se marca que un renglón es un bulto (y cuántos kilos entraron).
+ * En qué variedades sale, cuántos paquetes, con qué vencimiento y qué lote se
+ * decide acá, al embolsar — y eso pasa a lo largo de 10-15 días, en tandas.
  *
- * NO mueve stock: Dux ya recibió los paquetes en la compra de la recepción.
- * Descontar acá los contaría dos veces. Es un registro de trabajo.
+ * Cada tanda que se registra crea los vencimientos de esos paquetes. El progreso
+ * se calcula en gramos: se sabe cuántos kilos entraron y cuántos gramos tiene
+ * cada variedad, así que el sistema muestra cuánto del bulto ya se embolsó sin
+ * que haya que declarar un objetivo por adelantado.
+ *
+ * NO mueve stock: las cantidades las maneja Dux.
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { formatDate } from '@/lib/format'
-import { toTitleCase } from '@/lib/format'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { formatDate, hoyISO, toTitleCase, formatNum } from '@/lib/format'
+import { matchesQuery } from '@/lib/search'
+import { SUCURSALES_OPERATIVAS } from '@/lib/constants'
 
-interface FilaPendiente {
+interface ProductoFrac {
+  id: string
+  sku: string
+  nombre: string | null
+  unidad_medida: string | null
+}
+
+interface Tanda {
   id                  : string
-  cantidad_objetivo   : number
-  cantidad_fraccionada: number
-  estado              : string
-  recepcion_item_id   : string
   producto_final_id   : string
-  // resueltos aparte
-  sku                 : string
-  nombre              : string
-  bulto               : string
-  fecha_recepcion     : string | null
-  proveedor           : string | null
+  cantidad_fraccionada: number
+  fecha_vencimiento   : string | null
+  numero_lote         : string | null
+  sucursal_id         : string | null
+  created_at          : string
 }
 
 interface Bulto {
-  recepcionItemId: string
-  descripcion    : string
-  proveedor      : string | null
-  fecha          : string | null
-  filas          : FilaPendiente[]
+  itemId     : string
+  descripcion: string
+  proveedor  : string | null
+  fecha      : string | null
+  kgRecibidos: number
+  tandas     : Tanda[]
+}
+
+/** Gramos por unidad del SKU final. `unidad_medida` numérico = gramos. */
+function gramosPorUnidad(p: ProductoFrac | undefined): number {
+  if (!p) return 0
+  if (p.unidad_medida === 'kg') return 1000
+  const n = Number(p.unidad_medida)
+  return Number.isFinite(n) && n > 0 ? n : 0
 }
 
 export function TrabajoPendiente() {
-  const [bultos, setBultos]   = useState<Bulto[]>([])
-  const [loading, setLoading] = useState(true)
-  const [borrador, setBorrador] = useState<Record<string, string>>({})
-  const [guardando, setGuardando] = useState<string | null>(null)
+  const [bultos, setBultos]     = useState<Bulto[]>([])
+  const [productos, setProductos] = useState<ProductoFrac[]>([])
+  const [loading, setLoading]   = useState(true)
+  const [abierto, setAbierto]   = useState<string | null>(null)
+  const [guardando, setGuardando] = useState(false)
+
+  // Formulario de la tanda que se está cargando
+  const [fProducto, setFProducto] = useState('')
+  const [fBusqueda, setFBusqueda] = useState('')
+  const [fCantidad, setFCantidad] = useState('')
+  const [fVence, setFVence]       = useState('')
+  const [fLote, setFLote]         = useState('')
+  const [fSucursal, setFSucursal] = useState<string>(SUCURSALES_OPERATIVAS[0]?.id ?? '')
 
   const cargar = useCallback(async () => {
-    const { data: frac } = await supabase
-      .from('recepcion_item_fraccionamiento')
-      .select('id, cantidad_objetivo, cantidad_fraccionada, estado, recepcion_item_id, producto_final_id')
-      .order('created_at', { ascending: true })
-
-    const filasRaw = (frac ?? []) as Omit<FilaPendiente, 'sku'|'nombre'|'bulto'|'fecha_recepcion'|'proveedor'>[]
-    if (filasRaw.length === 0) { setBultos([]); setLoading(false); return }
-
-    const itemIds = [...new Set(filasRaw.map(f => f.recepcion_item_id))]
-    const prodIds = [...new Set(filasRaw.map(f => f.producto_final_id))]
-
-    const [{ data: itemsDb }, { data: prodsDb }] = await Promise.all([
-      supabase.from('recepcion_items')
-        .select('id, descripcion_proveedor, recepcion_id, recepciones(fecha_recepcion, proveedor_nombre)')
-        .in('id', itemIds),
-      supabase.from('productos').select('id, sku, nombre').in('id', prodIds),
-    ])
+    // Bultos = renglones de recepciones confirmadas marcados como granel.
+    const { data: itemsDb } = await supabase
+      .from('recepcion_items')
+      .select('id, descripcion_proveedor, cantidad_recibida, cantidad_esperada, recepciones!inner(estado, fecha_recepcion, proveedor_nombre)')
+      .eq('es_granel', true)
+      .eq('recepciones.estado', 'confirmada')
 
     type ItemDb = {
       id: string; descripcion_proveedor: string | null
+      cantidad_recibida: number | null; cantidad_esperada: number | null
       recepciones: { fecha_recepcion: string | null; proveedor_nombre: string | null } | null
     }
-    const itemMap = new Map((itemsDb as unknown as ItemDb[] ?? []).map(i => [i.id, i]))
-    const prodMap = new Map(((prodsDb ?? []) as { id: string; sku: string; nombre: string | null }[]).map(p => [p.id, p]))
+    const items = (itemsDb as unknown as ItemDb[]) ?? []
+    if (items.length === 0) { setBultos([]); setLoading(false); return }
 
-    const porBulto = new Map<string, Bulto>()
-    for (const f of filasRaw) {
-      const it = itemMap.get(f.recepcion_item_id)
-      const pr = prodMap.get(f.producto_final_id)
-      const fila: FilaPendiente = {
-        ...f,
-        // Number() explícito: son columnas `numeric` y si alguna vez llegaran
-        // como texto, `cantidad_fraccionada + suma` concatenaría ("8"+5="85")
-        // en vez de sumar.
-        cantidad_objetivo   : Number(f.cantidad_objetivo ?? 0),
-        cantidad_fraccionada: Number(f.cantidad_fraccionada ?? 0),
-        sku            : pr?.sku ?? '—',
-        nombre         : pr?.nombre ? toTitleCase(pr.nombre) : '—',
-        bulto          : it?.descripcion_proveedor ?? 'Bulto sin descripción',
-        fecha_recepcion: it?.recepciones?.fecha_recepcion ?? null,
-        proveedor      : it?.recepciones?.proveedor_nombre ?? null,
-      }
-      const b = porBulto.get(f.recepcion_item_id) ?? {
-        recepcionItemId: f.recepcion_item_id,
-        descripcion    : fila.bulto,
-        proveedor      : fila.proveedor,
-        fecha          : fila.fecha_recepcion,
-        filas          : [],
-      }
-      b.filas.push(fila)
-      porBulto.set(f.recepcion_item_id, b)
+    const [{ data: tandasDb }, { data: prodsDb }] = await Promise.all([
+      supabase.from('recepcion_item_fraccionamiento')
+        .select('id, recepcion_item_id, producto_final_id, cantidad_fraccionada, fecha_vencimiento, numero_lote, sucursal_id, created_at')
+        .in('recepcion_item_id', items.map(i => i.id)),
+      supabase.from('productos').select('id, sku, nombre, unidad_medida').eq('categoria', 'GRANEL'),
+    ])
+
+    const porItem = new Map<string, Tanda[]>()
+    for (const t of ((tandasDb ?? []) as (Tanda & { recepcion_item_id: string })[])) {
+      const lista = porItem.get(t.recepcion_item_id) ?? []
+      lista.push({ ...t, cantidad_fraccionada: Number(t.cantidad_fraccionada ?? 0) })
+      porItem.set(t.recepcion_item_id, lista)
     }
 
-    // Los bultos con trabajo pendiente van primero, y dentro de esos el más viejo
-    // arriba: es el que lleva más días a medio fraccionar.
-    const lista = [...porBulto.values()].sort((a, b) => {
-      const pa = a.filas.some(f => f.cantidad_fraccionada < f.cantidad_objetivo)
-      const pb = b.filas.some(f => f.cantidad_fraccionada < f.cantidad_objetivo)
-      if (pa !== pb) return pa ? -1 : 1
+    const lista: Bulto[] = items.map(i => ({
+      itemId     : i.id,
+      descripcion: i.descripcion_proveedor ?? 'Bulto sin descripción',
+      proveedor  : i.recepciones?.proveedor_nombre ?? null,
+      fecha      : i.recepciones?.fecha_recepcion ?? null,
+      kgRecibidos: Number(i.cantidad_recibida ?? i.cantidad_esperada ?? 0),
+      tandas     : (porItem.get(i.id) ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    }))
+
+    // Los que tienen trabajo sin registrar primero, y dentro de esos el más viejo
+    // arriba: es el que lleva más días a medio embolsar.
+    lista.sort((a, b) => {
+      const va = a.tandas.length === 0, vb = b.tandas.length === 0
+      if (va !== vb) return va ? -1 : 1
       return (a.fecha ?? '').localeCompare(b.fecha ?? '')
     })
+
+    setProductos(((prodsDb ?? []) as ProductoFrac[]))
     setBultos(lista)
     setLoading(false)
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
 
-  /** Define cuántas unidades salen del bulto. Se puede hacer acá porque es
-   *  donde se nota que falta: si el objetivo quedó vacío en la recepción, la
-   *  fila mostraba "0 /" y no dejaba registrar nada. */
-  async function definirObjetivo(fila: FilaPendiente) {
-    const obj = Number(borrador[`obj:${fila.id}`])
-    if (!Number.isFinite(obj) || obj <= 0) {
-      toast.error('Poné cuántas unidades salen del bulto')
-      return
-    }
-    setGuardando(fila.id)
-    const { error } = await supabase.from('recepcion_item_fraccionamiento')
-      .update({ cantidad_objetivo: obj, updated_at: new Date().toISOString() })
-      .eq('id', fila.id)
-    setGuardando(null)
-    if (error) { toast.error('No se pudo guardar: ' + error.message); return }
-    setBorrador(b => ({ ...b, [`obj:${fila.id}`]: '' }))
-    toast.success(`${fila.nombre}: ${obj} unidades a fraccionar`)
-    cargar()
+  const prodMap = useMemo(() => new Map(productos.map(p => [p.id, p])), [productos])
+
+  const sugeridos = useMemo(() => {
+    if (fBusqueda.trim().length < 2) return []
+    return productos.filter(p => matchesQuery(fBusqueda, p.nombre, p.sku)).slice(0, 8)
+  }, [fBusqueda, productos])
+
+  function abrir(itemId: string) {
+    setAbierto(a => a === itemId ? null : itemId)
+    setFProducto(''); setFBusqueda(''); setFCantidad(''); setFVence(''); setFLote('')
   }
 
-  async function registrar(fila: FilaPendiente) {
-    const suma = Number(borrador[fila.id])
-    if (!Number.isFinite(suma) || suma <= 0) {
-      toast.error('Poné cuántas unidades embolsaste')
-      return
-    }
-    const nuevo = fila.cantidad_fraccionada + suma
-    if (nuevo > fila.cantidad_objetivo) {
-      const ok = window.confirm(
-        `Estarías registrando ${nuevo} de ${fila.cantidad_objetivo} previstas para ${fila.nombre}.\n\n` +
-        '¿Salieron más unidades de las declaradas en la recepción?'
-      )
-      if (!ok) return
-    }
-    setGuardando(fila.id)
-    const { error } = await supabase.from('recepcion_item_fraccionamiento')
-      .update({
-        cantidad_fraccionada: nuevo,
-        estado              : nuevo >= fila.cantidad_objetivo ? 'completo' : 'pendiente',
-        updated_at          : new Date().toISOString(),
+  async function registrarTanda(b: Bulto) {
+    const cant = Number(fCantidad)
+    if (!fProducto)                       { toast.error('Elegí en qué variedad se fraccionó'); return }
+    if (!Number.isFinite(cant) || cant <= 0) { toast.error('Poné cuántos paquetes salieron'); return }
+    if (!fVence)                          { toast.error('Falta la fecha de vencimiento'); return }
+
+    setGuardando(true)
+    try {
+      const { error: e1 } = await supabase.from('recepcion_item_fraccionamiento').insert({
+        recepcion_item_id   : b.itemId,
+        producto_final_id   : fProducto,
+        cantidad_fraccionada: cant,
+        fecha_vencimiento   : fVence,
+        numero_lote         : fLote.trim() || null,
+        sucursal_id         : fSucursal || null,
+        estado              : 'completo',
       })
-      .eq('id', fila.id)
-    setGuardando(null)
-    if (error) { toast.error('No se pudo guardar: ' + error.message); return }
-    setBorrador(b => ({ ...b, [fila.id]: '' }))
-    toast.success(`${suma} × ${fila.nombre}`)
+      if (e1) throw new Error(e1.message)
+
+      // Los paquetes embolsados sí son stock con vencimiento: se suman a la
+      // fecha correspondiente, igual que en una recepción normal.
+      const { data: existente } = await supabase.from('vencimientos')
+        .select('id, cantidad')
+        .eq('producto_id', fProducto)
+        .eq('sucursal_id', fSucursal)
+        .eq('fecha_vencimiento', fVence)
+        .maybeSingle()
+      if (existente) {
+        const prev = existente as { id: string; cantidad: number }
+        await supabase.from('vencimientos')
+          .update({ cantidad: Number(prev.cantidad) + cant, updated_at: new Date().toISOString() })
+          .eq('id', prev.id)
+      } else {
+        await supabase.from('vencimientos').insert({
+          producto_id      : fProducto,
+          sucursal_id      : fSucursal,
+          fecha_vencimiento: fVence,
+          cantidad         : cant,
+          origen           : 'fraccionamiento',
+        })
+      }
+
+      toast.success(`${cant} paquetes registrados`)
+      setFProducto(''); setFBusqueda(''); setFCantidad(''); setFLote('')
+      cargar()
+    } catch (err) {
+      toast.error('No se pudo guardar: ' + (err as Error).message)
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  async function borrarTanda(t: Tanda) {
+    if (!window.confirm('¿Borrar esta tanda? No se descuenta el vencimiento que ya generó.')) return
+    const { error } = await supabase.from('recepcion_item_fraccionamiento').delete().eq('id', t.id)
+    if (error) { toast.error('No se pudo borrar: ' + error.message); return }
+    toast.success('Tanda borrada')
     cargar()
   }
 
-  if (loading) return <p className="text-sm text-zinc-400 py-8">Cargando trabajo pendiente...</p>
+  if (loading) return <p className="text-sm text-zinc-400 py-8">Cargando bultos...</p>
 
   if (bultos.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-zinc-300 py-14 text-center">
         <p className="text-sm text-zinc-500">No hay bultos para fraccionar</p>
         <p className="text-xs text-zinc-400 mt-1">
-          Aparecen acá cuando en una recepción marcás un ítem como granel y le asignás los productos finales.
+          Aparecen acá cuando confirmás una recepción con renglones marcados como granel.
         </p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {bultos.map(b => {
-        // Una fila sin objetivo definido no se puede dar por terminada: si se
-        // contara como 0 de 0, el bulto entero figuraba "✓ completo" y no
-        // dejaba hacer nada.
-        const sinDefinir = b.filas.filter(f => !(f.cantidad_objetivo > 0)).length
-        const objetivo   = b.filas.reduce((s, f) => s + Math.max(0, f.cantidad_objetivo), 0)
-        const hecho      = b.filas.reduce((s, f) => s + Math.min(f.cantidad_fraccionada, Math.max(0, f.cantidad_objetivo)), 0)
-        const pct        = objetivo > 0 ? Math.round(100 * hecho / objetivo) : 0
-        const terminado  = sinDefinir === 0 && objetivo > 0 && hecho >= objetivo
-        const dias       = b.fecha ? Math.floor((Date.now() - new Date(b.fecha).getTime()) / 86400000) : null
+        const gramosHechos = b.tandas.reduce((s, t) =>
+          s + t.cantidad_fraccionada * gramosPorUnidad(prodMap.get(t.producto_final_id)), 0)
+        const gramosTotales = b.kgRecibidos * 1000
+        const pct = gramosTotales > 0 ? Math.min(100, Math.round(100 * gramosHechos / gramosTotales)) : 0
+        const restanKg = Math.max(0, (gramosTotales - gramosHechos) / 1000)
+        const dias = b.fecha ? Math.floor((Date.now() - new Date(b.fecha).getTime()) / 86400000) : null
+        const estaAbierto = abierto === b.itemId
 
         return (
-          <div key={b.recepcionItemId} className={`rounded-xl border bg-white overflow-hidden ${terminado ? 'border-emerald-200' : 'border-zinc-200'}`}>
-            <div className={`px-4 py-3 border-b ${terminado ? 'bg-emerald-50 border-emerald-100' : 'bg-zinc-50 border-zinc-100'}`}>
+          <div key={b.itemId} className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
+            <button
+              onClick={() => abrir(b.itemId)}
+              className="w-full text-left px-4 py-3 hover:bg-zinc-50 transition-colors"
+            >
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div className="min-w-0">
                   <p className="font-semibold text-sm text-zinc-900 leading-snug">{b.descripcion}</p>
@@ -205,83 +240,125 @@ export function TrabajoPendiente() {
                     {dias !== null && dias > 0 && <> · hace {dias} día{dias === 1 ? '' : 's'}</>}
                   </p>
                 </div>
-                <span className={`text-xs font-semibold shrink-0 ${
-                  terminado ? 'text-emerald-700' : sinDefinir > 0 ? 'text-amber-700' : 'text-zinc-600'
-                }`}>
-                  {terminado
-                    ? '✓ Fraccionado completo'
-                    : sinDefinir > 0
-                    ? `Falta definir ${sinDefinir} producto${sinDefinir === 1 ? '' : 's'}`
-                    : `${hecho} de ${objetivo} unidades`}
-                </span>
+                <div className="text-right shrink-0">
+                  <span className={`text-xs font-semibold ${pct >= 100 ? 'text-emerald-700' : 'text-zinc-600'}`}>
+                    {b.tandas.length === 0
+                      ? 'Sin fraccionar'
+                      : pct >= 100 ? '✓ Bulto terminado' : `${pct}% embolsado`}
+                  </span>
+                  {b.kgRecibidos > 0 && (
+                    <p className="text-[11px] text-zinc-400 mt-0.5 tabular-nums">
+                      {formatNum(b.kgRecibidos, 2)} kg · restan {formatNum(restanKg, 2)} kg
+                    </p>
+                  )}
+                </div>
               </div>
-              <Progress value={pct} className="mt-2 h-1.5" />
-            </div>
+              {b.kgRecibidos > 0 && <Progress value={pct} className="mt-2 h-1.5" />}
+            </button>
 
-            <div className="divide-y divide-zinc-100">
-              {b.filas.map(f => {
-                const definido = f.cantidad_objetivo > 0
-                const falta = definido ? Math.max(0, f.cantidad_objetivo - f.cantidad_fraccionada) : 0
+            {estaAbierto && (
+              <div className="border-t border-zinc-100 px-4 py-3 space-y-3 bg-zinc-50/50">
+                {/* Tandas ya registradas */}
+                {b.tandas.length > 0 && (
+                  <div className="space-y-1">
+                    {b.tandas.map(t => {
+                      const p = prodMap.get(t.producto_final_id)
+                      return (
+                        <div key={t.id} className="flex items-center gap-3 text-xs bg-white rounded border border-zinc-200 px-3 py-2 flex-wrap">
+                          <span className="font-medium text-zinc-800 flex-1 min-w-[160px]">
+                            {p?.nombre ? toTitleCase(p.nombre) : '—'}
+                          </span>
+                          <span className="tabular-nums text-zinc-700">{t.cantidad_fraccionada} paq.</span>
+                          <span className="text-zinc-500">vence {t.fecha_vencimiento ? formatDate(t.fecha_vencimiento) : '—'}</span>
+                          {t.numero_lote && <span className="text-zinc-400 font-mono">lote {t.numero_lote}</span>}
+                          <button onClick={() => borrarTanda(t)} className="text-red-500 hover:text-red-700 ml-auto">✕</button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
 
-                // Sin objetivo no se puede registrar avance: primero hay que
-                // decir cuántas unidades salen del bulto.
-                if (!definido) {
-                  return (
-                    <div key={f.id} className="flex items-center gap-3 px-4 py-2.5 flex-wrap bg-amber-50/50">
-                      <div className="flex-1 min-w-[180px]">
-                        <p className="text-sm text-zinc-800 leading-snug">{f.nombre}</p>
-                        <p className="text-xs text-zinc-400 font-mono">{f.sku}</p>
-                      </div>
-                      <span className="text-xs text-amber-800 shrink-0">¿Cuántas unidades salen?</span>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Input
-                          type="number" min={1}
-                          placeholder="Ej: 33"
-                          className="w-24 h-8"
-                          value={borrador[`obj:${f.id}`] ?? ''}
-                          onChange={e => setBorrador(b2 => ({ ...b2, [`obj:${f.id}`]: e.target.value }))}
-                          onKeyDown={e => { if (e.key === 'Enter') definirObjetivo(f) }}
-                        />
-                        <Button size="sm" variant="outline" disabled={guardando === f.id} onClick={() => definirObjetivo(f)}>
-                          {guardando === f.id ? 'Guardando...' : 'Definir'}
-                        </Button>
-                      </div>
-                    </div>
-                  )
-                }
+                {/* Alta de tanda */}
+                <div className="bg-white rounded-lg border border-zinc-200 p-3 space-y-2.5">
+                  <p className="text-xs font-semibold text-zinc-700">Registrar lo que se embolsó</p>
 
-                return (
-                  <div key={f.id} className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
-                    <div className="flex-1 min-w-[180px]">
-                      <p className="text-sm text-zinc-800 leading-snug">{f.nombre}</p>
-                      <p className="text-xs text-zinc-400 font-mono">{f.sku}</p>
-                    </div>
-                    <div className="text-xs tabular-nums text-zinc-600 shrink-0 w-28">
-                      {f.cantidad_fraccionada} / {f.cantidad_objetivo}
-                      {falta > 0 && <span className="text-amber-700"> · faltan {falta}</span>}
-                    </div>
-                    {falta > 0 ? (
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Input
-                          type="number"
-                          min={1}
-                          placeholder="Embolsé..."
-                          className="w-28 h-8"
-                          value={borrador[f.id] ?? ''}
-                          onChange={e => setBorrador(b2 => ({ ...b2, [f.id]: e.target.value }))}
-                          onKeyDown={e => { if (e.key === 'Enter') registrar(f) }}
-                        />
-                        <Button size="sm" disabled={guardando === f.id} onClick={() => registrar(f)}>
-                          {guardando === f.id ? 'Guardando...' : 'Registrar'}
-                        </Button>
+                  <div>
+                    <label className="text-[11px] text-zinc-500">¿En qué variedad?</label>
+                    {fProducto ? (
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-sm text-zinc-800 flex-1">
+                          {toTitleCase(prodMap.get(fProducto)?.nombre ?? '')}
+                          <span className="text-xs text-zinc-400 ml-2">
+                            {gramosPorUnidad(prodMap.get(fProducto)) || '?'} g c/u
+                          </span>
+                        </span>
+                        <button onClick={() => { setFProducto(''); setFBusqueda('') }}
+                          className="text-xs text-zinc-400 underline">cambiar</button>
                       </div>
                     ) : (
-                      <span className="text-xs font-medium text-emerald-700 shrink-0">✓ Listo</span>
+                      <>
+                        <Input value={fBusqueda} onChange={e => setFBusqueda(e.target.value)}
+                          placeholder="Buscá el producto fraccionado..." className="h-8 mt-0.5" />
+                        {sugeridos.length > 0 && (
+                          <div className="mt-1 border rounded max-h-40 overflow-y-auto">
+                            {sugeridos.map(p => (
+                              <button key={p.id} onClick={() => { setFProducto(p.id); setFBusqueda('') }}
+                                className="w-full text-left px-2 py-1.5 text-xs hover:bg-emerald-50 border-b last:border-b-0">
+                                <span className="text-zinc-800">{toTitleCase(p.nombre ?? p.sku)}</span>
+                                <span className="text-zinc-400 ml-2">{gramosPorUnidad(p) || '?'} g</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
-                )
-              })}
-            </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div>
+                      <label className="text-[11px] text-zinc-500">Paquetes</label>
+                      <Input type="number" min={1} value={fCantidad}
+                        onChange={e => setFCantidad(e.target.value)} className="h-8" placeholder="Ej: 20" />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-zinc-500">Vence</label>
+                      <Input type="date" value={fVence} min={hoyISO()}
+                        onChange={e => setFVence(e.target.value)} className="h-8" />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-zinc-500">Lote (opcional)</label>
+                      <Input value={fLote} onChange={e => setFLote(e.target.value)}
+                        className="h-8" placeholder="—" />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-zinc-500">Sucursal</label>
+                      <Select value={fSucursal} onValueChange={v => setFSucursal(v ?? '')}>
+                        <SelectTrigger className="h-8">
+                          <SelectValue>
+                            {SUCURSALES_OPERATIVAS.find(s => s.id === fSucursal)?.nombre ?? 'Elegir'}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SUCURSALES_OPERATIVAS.map(s => (
+                            <SelectItem key={s.id} value={s.id}>{s.nombre}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {fProducto && Number(fCantidad) > 0 && gramosPorUnidad(prodMap.get(fProducto)) > 0 && (
+                    <p className="text-[11px] text-zinc-500">
+                      Son {formatNum(Number(fCantidad) * gramosPorUnidad(prodMap.get(fProducto)) / 1000, 2)} kg del bulto.
+                    </p>
+                  )}
+
+                  <Button size="sm" disabled={guardando} onClick={() => registrarTanda(b)}>
+                    {guardando ? 'Guardando...' : 'Registrar fraccionado'}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )
       })}

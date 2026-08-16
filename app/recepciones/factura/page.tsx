@@ -1391,11 +1391,14 @@ export default function RecepcionFacturaPage() {
 
     // Sin NINGÚN ítem asignado la recepción no sirve aguas abajo: no va a Dux,
     // no genera vencimientos y no actualiza costos. Se bloquea.
-    const asignados = items.filter(i => i.producto_id || (i.es_granel && (i.derivados?.length ?? 0) > 0))
+    // El granel cuenta como resuelto: se marca como bulto y sus variedades se
+    // cargan después, en Fraccionamiento.
+    const asignados = items.filter(i => i.producto_id || i.es_granel)
     if (asignados.length === 0) {
       toast.error(
         'No hay ningún ítem asignado a un producto. Así la recepción no llega a Dux, ' +
-        'no genera vencimientos y no actualiza costos. Asigná al menos uno con "+ Asignar".',
+        'no genera vencimientos y no actualiza costos. Asigná al menos uno con "+ Asignar", ' +
+        'o marcá como granel los que sean bultos a fraccionar.',
         { duration: 10000 },
       )
       return
@@ -1478,20 +1481,10 @@ export default function RecepcionFacturaPage() {
 
       // ── 2. Crear vencimientos (los items y sus lotes ya estan en DB) ──
       for (const item of items) {
-        // Granel: el bulto madre no es un producto de stock, pero los SKUs
-        // fraccionados sí. Heredan la fecha del envase original — embolsar el
-        // día 12 no cambia cuándo vence la mercadería. Antes se salteaba entero
-        // y por eso el granel tenía 0% de cobertura siendo el 36% del stock.
-        if (item.es_granel) {
-          if (item.estado_recepcion === 'vencido_llegada') continue
-          const fechaMadre = item.lotes.find(l => l.fecha_vencimiento)?.fecha_vencimiento
-            ?? item.fecha_vencimiento
-          if (!fechaMadre) continue
-          for (const d of item.derivados ?? []) {
-            await sumarVencimiento(d.producto_id, fechaMadre, d.cantidad_objetivo ?? 0)
-          }
-          continue
-        }
+        // El granel no genera vencimientos acá: al recibir todavía no se sabe
+        // en qué paquetes sale ni cuántos. Eso se carga en Fraccionamiento al
+        // embolsar, junto con la fecha y el lote de cada tanda.
+        if (item.es_granel) continue
         if (!item.producto_id || item.estado_recepcion === 'vencido_llegada') continue
 
         // Multi-lote: una fecha por lote.
@@ -1571,43 +1564,21 @@ export default function RecepcionFacturaPage() {
       // Include all matched items (granel included — Dux needs the purchase registered)
       // Líneas que van a la compra de Dux.
       //
-      // El granel no tiene un SKU propio: el bulto madre no existe en el ERP.
-      // Lo que se registra son los N SKUs fraccionados con sus cantidades —
-      // exactamente lo que hoy se carga a mano en Dux. Se reparte el costo del
-      // bulto entre los derivados a prorrata de las unidades, para que el total
-      // de la línea siga cerrando contra la factura.
+      // El granel queda AFUERA a propósito: el bulto madre no existe como
+      // producto en el ERP, y en qué paquetes se fracciona recién se decide al
+      // embolsar, días después. Esas líneas se cargan a mano en Dux, como
+      // siempre; SOHO se ocupa de lo que Dux no tiene (vencimiento, lote y
+      // seguimiento del fraccionado).
       type LineaDux = { sku: string; cantidad: number; costo: number; iva: number; recibida: number }
-      const duxItems: LineaDux[] = []
-      for (const i of items) {
-        if (i.cantidad <= 0) continue
-
-        if (i.es_granel) {
-          const derivados = (i.derivados ?? []).filter(d => (d.cantidad_objetivo ?? 0) > 0)
-          const totalUnidades = derivados.reduce((s, d) => s + (d.cantidad_objetivo ?? 0), 0)
-          if (totalUnidades === 0) continue
-          const valorLinea = i.costo_unitario * i.cantidad
-          for (const d of derivados) {
-            const unidades = d.cantidad_objetivo ?? 0
-            duxItems.push({
-              sku      : d.producto_sku,
-              cantidad : unidades,
-              costo    : Math.round(valorLinea * (unidades / totalUnidades) / unidades * 100) / 100,
-              iva      : i.iva_porcentaje,
-              recibida : unidades,
-            })
-          }
-          continue
-        }
-
-        if (!i.producto_sku) continue
-        duxItems.push({
-          sku      : i.producto_sku,
+      const duxItems: LineaDux[] = items
+        .filter(i => !i.es_granel && i.producto_sku && i.cantidad > 0)
+        .map(i => ({
+          sku      : i.producto_sku!,
           cantidad : i.cantidad,
           costo    : i.costo_unitario,
           iva      : i.iva_porcentaje,
           recibida : i.cantidad_recibida,
-        })
-      }
+        }))
 
       // Resolve id_proveedor for the Dux purchase:
       // Priority 1: dux_proveedor_id set explicitly in proveedores_config (by proveedor_nombre)
@@ -1758,15 +1729,11 @@ export default function RecepcionFacturaPage() {
     const totalIva  = items.reduce((s, i) => s + i.costo_unitario * i.cantidad * ((i.iva_porcentaje ?? 0) / 100), 0)
     return {
       total      : items.length,
-      // Un granel sin derivados también está pendiente: no llega a Dux ni genera
-      // vencimientos. Antes solo contaba el no-granel, así que una factura toda
-      // de bultos sin configurar mostraba "todo listo".
-      pendientes : items.filter(i => i.es_granel
-        ? (i.derivados?.length ?? 0) === 0
-        : !i.producto_id).length,
-      mapeados   : items.filter(i => i.es_granel
-        ? (i.derivados?.length ?? 0) > 0
-        : Boolean(i.producto_id)).length,
+      // Un granel queda resuelto con solo estar marcado como tal: sus variedades
+      // se cargan después, en Fraccionamiento. Lo que sí falta es que los
+      // no-granel tengan producto asignado.
+      pendientes : items.filter(i => !i.es_granel && !i.producto_id).length,
+      mapeados   : items.filter(i => i.es_granel || Boolean(i.producto_id)).length,
       granel     : items.filter(i => i.es_granel).length,
       blisters   : items.filter(i => i.es_blister && !i.es_granel).length,
       totalCosto : totalNeto,
@@ -2022,9 +1989,7 @@ export default function RecepcionFacturaPage() {
                   // Filtro "solo sin asignar": se ocultan las filas ya resueltas
                   // en vez de sacarlas del array, así los índices que usan los
                   // handlers de edición siguen apuntando al ítem correcto.
-                  const resuelto = item.es_granel
-                    ? (item.derivados?.length ?? 0) > 0
-                    : Boolean(item.producto_id)
+                  const resuelto = item.es_granel || Boolean(item.producto_id)
                   if (soloSinAsignar && resuelto) return null
                   const rowCls = item.es_granel
                     ? 'bg-emerald-50'
@@ -2054,35 +2019,16 @@ export default function RecepcionFacturaPage() {
 
                       {/* Matched product (or list of derivados if granel) */}
                       <td className="px-3 py-2 max-w-[200px]">
+                        {/* En qué paquetes sale el bulto ya no se declara acá:
+                            al recibir todavía no se sabe. Se carga en
+                            Fraccionamiento al embolsar, con fecha y lote. */}
                         {item.es_granel ? (
-                          <div className="space-y-0.5">
-                            {(item.derivados ?? []).length === 0 ? (
-                              <button onClick={() => setGranelTarget(i)}
-                                className="text-xs text-red-600 underline hover:text-red-800 font-medium text-left">
-                                + Asignar productos fraccionados
-                                <span className="block text-[10px] text-zinc-500 no-underline font-normal">
-                                  Es un bulto: elegí en qué paquetes sale
-                                </span>
-                              </button>
-                            ) : (
-                              <>
-                                <ul className="text-[11px] text-zinc-700 leading-tight space-y-0.5">
-                                  {(item.derivados ?? []).map((d, di) => (
-                                    <li key={di} className="truncate" title={d.producto_nombre ?? d.producto_sku}>
-                                      · {d.producto_nombre ?? d.producto_sku}
-                                      {d.cantidad_objetivo != null && (
-                                        <span className="text-zinc-400"> ({d.cantidad_objetivo})</span>
-                                      )}
-                                    </li>
-                                  ))}
-                                </ul>
-                                <button onClick={() => setGranelTarget(i)}
-                                  className="text-[10px] text-emerald-700 underline hover:text-emerald-900">
-                                  Editar derivados ({(item.derivados ?? []).length})
-                                </button>
-                              </>
-                            )}
-                          </div>
+                          <span className="text-[11px] text-emerald-700 leading-tight block">
+                            Bulto a fraccionar
+                            <span className="block text-[10px] text-zinc-500">
+                              Las variedades se cargan al embolsar, en Fraccionamiento
+                            </span>
+                          </span>
                         ) : item.producto_nombre ? (
                           <>
                             <div className="text-xs font-medium text-zinc-800 truncate" title={item.producto_nombre}>
