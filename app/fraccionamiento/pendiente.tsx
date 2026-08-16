@@ -70,6 +70,9 @@ export function TrabajoPendiente() {
   const [loading, setLoading]   = useState(true)
   const [abierto, setAbierto]   = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
+  // Los bultos cerrados se ocultan: esta pantalla es de trabajo pendiente y si
+  // se acumulan tapan lo que hay que hacer. Quedan a un click.
+  const [verTerminados, setVerTerminados] = useState(false)
 
   // Formulario de la tanda que se está cargando
   const [fProducto, setFProducto] = useState('')
@@ -249,6 +252,10 @@ export function TrabajoPendiente() {
 
   if (loading) return <p className="text-sm text-zinc-400 py-8">Cargando bultos...</p>
 
+  const abiertos   = bultos.filter(b => b.estado !== 'terminado')
+  const terminados = bultos.filter(b => b.estado === 'terminado')
+  const visibles   = verTerminados ? bultos : abiertos
+
   if (bultos.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-zinc-300 py-14 text-center">
@@ -286,7 +293,25 @@ export function TrabajoPendiente() {
         ))}
       </div>
 
-      {bultos.map(b => {
+      {terminados.length > 0 && (
+        <button
+          onClick={() => setVerTerminados(v => !v)}
+          className="text-xs text-zinc-500 underline hover:text-zinc-800"
+        >
+          {verTerminados
+            ? `Ocultar ${terminados.length} bulto${terminados.length === 1 ? '' : 's'} terminado${terminados.length === 1 ? '' : 's'}`
+            : `Ver ${terminados.length} bulto${terminados.length === 1 ? '' : 's'} terminado${terminados.length === 1 ? '' : 's'}`}
+        </button>
+      )}
+
+      {abiertos.length === 0 && !verTerminados && (
+        <div className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50/40 py-10 text-center">
+          <p className="text-sm text-emerald-800 font-medium">No queda nada por fraccionar</p>
+          <p className="text-xs text-zinc-500 mt-1">Todos los bultos recibidos están terminados.</p>
+        </div>
+      )}
+
+      {visibles.map(b => {
         const gramosHechos = b.tandas.reduce((s, t) =>
           s + t.cantidad_fraccionada * gramosPorUnidad(prodMap.get(t.producto_final_id)), 0)
         const gramosTotales = b.kgRecibidos * 1000
