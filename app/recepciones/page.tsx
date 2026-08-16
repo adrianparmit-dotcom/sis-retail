@@ -2,12 +2,14 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import Link from 'next/link'
+import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import type { Recepcion } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { AlertCircle } from 'lucide-react'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { AlertCircle, Trash2 } from 'lucide-react'
 
 const ESTADO_CONFIG: Record<string, { label: string; className: string }> = {
   borrador   : { label: 'Borrador',   className: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
@@ -22,20 +24,49 @@ const fmtFecha = (s: string | null) => {
   return `${d}/${m}/${y}`
 }
 
+// Recepción + cuántos ítems tiene cargados, para poder avisar qué se pierde
+// al descartar un borrador.
+type RecepcionConItems = Recepcion & { recepcion_items?: { count: number }[] }
+
+function contarItems(r: RecepcionConItems): number {
+  return r.recepcion_items?.[0]?.count ?? 0
+}
+
 export default function RecepcionesPage() {
-  const [data, setData]       = useState<Recepcion[]>([])
+  const [data, setData]       = useState<RecepcionConItems[]>([])
   const [loading, setLoading] = useState(true)
+  const [aDescartar, setADescartar] = useState<RecepcionConItems | null>(null)
+  const [borrando, setBorrando] = useState(false)
 
   useEffect(() => {
     supabase.from('recepciones')
-      .select('*')
+      .select('*, recepcion_items(count)')
       .order('created_at', { ascending: false })
       .limit(100)
       .then(({ data }) => {
-        setData((data ?? []) as Recepcion[])
+        setData((data ?? []) as RecepcionConItems[])
         setLoading(false)
       })
   }, [])
+
+  async function descartarBorrador() {
+    if (!aDescartar) return
+    setBorrando(true)
+    // Solo borradores: una recepción confirmada ya generó vencimientos y la FK
+    // (NO ACTION) impide borrarla, que es justamente la protección que queremos.
+    const { error } = await supabase.from('recepciones')
+      .delete()
+      .eq('id', aDescartar.id)
+      .eq('estado', 'borrador')
+    setBorrando(false)
+    if (error) {
+      toast.error('No se pudo descartar: ' + error.message)
+      return
+    }
+    setData(prev => prev.filter(r => r.id !== aDescartar.id))
+    toast.success(`Borrador descartado${aDescartar.proveedor_nombre ? ` — ${aDescartar.proveedor_nombre}` : ''}`)
+    setADescartar(null)
+  }
 
   const borradores   = useMemo(() => data.filter(r => r.estado === 'borrador'),   [data])
   const confirmadas  = useMemo(() => data.filter(r => r.estado !== 'borrador'),   [data])
@@ -87,13 +118,25 @@ export default function RecepcionesPage() {
                   </div>
                   <div className="text-xs text-zinc-500 mt-0.5">
                     Factura: {fmtFecha(r.fecha_factura)} · Guardado: {fmtFecha(r.fecha_recepcion)}
+                    {' · '}{contarItems(r)} ítem{contarItems(r) === 1 ? '' : 's'}
                   </div>
                 </div>
-                <Link href={`/recepciones/factura?borrador=${r.id}`}>
-                  <Button size="sm" className="bg-yellow-600 hover:bg-yellow-700 text-white shrink-0">
-                    Retomar →
+                <div className="flex items-center gap-2 shrink-0">
+                  <Link href={`/recepciones/factura?borrador=${r.id}`}>
+                    <Button size="sm" className="bg-yellow-600 hover:bg-yellow-700 text-white">
+                      Retomar →
+                    </Button>
+                  </Link>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-red-600 border-red-200 hover:bg-red-50"
+                    onClick={() => setADescartar(r)}
+                    aria-label={`Descartar borrador de ${r.proveedor_nombre ?? 'sin proveedor'}`}
+                  >
+                    <Trash2 size={14} />
                   </Button>
-                </Link>
+                </div>
               </div>
             ))}
           </div>
@@ -149,6 +192,22 @@ export default function RecepcionesPage() {
           </TableBody>
         </Table>
       </div>
+
+      <ConfirmDialog
+        open={aDescartar !== null}
+        variant="danger"
+        title="¿Descartar este borrador?"
+        description={aDescartar
+          ? `${aDescartar.proveedor_nombre ?? 'Sin proveedor'}${aDescartar.numero_comprobante ? ` · ${aDescartar.numero_comprobante}` : ''}. ` +
+            `Se pierden ${contarItems(aDescartar)} ítem${contarItems(aDescartar) === 1 ? '' : 's'} cargados. ` +
+            'No se tocan vencimientos ni stock — este borrador nunca se confirmó. No se puede deshacer.'
+          : undefined}
+        confirmLabel="Descartar"
+        cancelLabel="Volver"
+        loading={borrando}
+        onConfirm={descartarBorrador}
+        onCancel={() => setADescartar(null)}
+      />
     </div>
   )
 }
