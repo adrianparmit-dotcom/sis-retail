@@ -49,6 +49,30 @@ export function claveCanonica(nombre: string | null | undefined, alias?: Map<str
   return alias?.get(k) ?? k
 }
 
+/**
+ * Clave de un renglón de factura dentro de un proveedor.
+ *
+ * Normalmente es el código del proveedor. Pero hay facturas que **no traen
+ * código** (Ankas del Sur y otros 5 proveedores: 96 ítems históricos). Ahí el
+ * código viene vacío y, como la clave única de `proveedor_sku_map` es
+ * (proveedor, sku_proveedor), todos esos renglones colapsarían en una sola fila:
+ * el aprendizaje no solo no serviría, quedaría cruzado — el último producto
+ * mapeado se aplicaría a todos.
+ *
+ * Cuando no hay código se usa la descripción normalizada como clave, con el
+ * prefijo `#d:` para que se vea a simple vista que es derivada y no un código
+ * real del proveedor.
+ */
+export function claveItemProveedor(
+  skuProveedor: string | null | undefined,
+  descripcion: string | null | undefined,
+): string {
+  const sku = (skuProveedor ?? '').trim()
+  if (sku !== '') return sku
+  const desc = normalizeText(descripcion).replace(/[^a-z0-9]+/g, ' ').trim()
+  return desc === '' ? '' : `#d:${desc}`
+}
+
 /** ¿Son el mismo proveedor? Tolera grafías distintas y alias declarados. */
 export function mismoProveedor(
   a: string | null | undefined,

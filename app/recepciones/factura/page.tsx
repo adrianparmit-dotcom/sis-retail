@@ -28,7 +28,7 @@ import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
 import { hoyISO } from '@/lib/format'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { normalizeText } from '@/lib/search'
-import { construirIndiceAlias, mismoProveedor } from '@/lib/proveedores'
+import { claveItemProveedor, construirIndiceAlias, mismoProveedor } from '@/lib/proveedores'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -936,9 +936,11 @@ export default function RecepcionFacturaPage() {
     // Comparar por clave dura (sin puntuación ni mayúsculas) + alias: si no,
     // "Shuk S.R.L" no encuentra lo aprendido bajo "SHUK S.R.L." y la factura
     // entera queda sin mapear.
+    const clave = claveItemProveedor(item.sku_proveedor, item.descripcion_proveedor)
+    if (!clave) return { ...item, match_confidence: 'sin_match' }
     const mapEntry = skuMap.find(
       e => mismoProveedor(e.proveedor_nombre, proveedorNombre, aliasProveedor)
-        && e.sku_proveedor === item.sku_proveedor
+        && claveItemProveedor(e.sku_proveedor, e.descripcion_proveedor) === clave
     )
     if (mapEntry?.producto_id) {
       const p = productos.find(p => p.id === mapEntry.producto_id)
@@ -1495,14 +1497,20 @@ export default function RecepcionFacturaPage() {
       }
 
       // ── 4. Save new SKU mappings ─────────────────────────────
+      // Se guarda bajo `claveItemProveedor`: el código del proveedor cuando
+      // existe, y si no la descripción normalizada. Antes se exigía código, así
+      // que los proveedores cuya factura no lo trae (Ankas del Sur y otros 5,
+      // 96 ítems históricos) no aprendían nunca y había que remapear todo en
+      // cada factura.
       const newMappings = items.filter(i =>
-        i.sku_proveedor && i.producto_id &&
+        i.producto_id &&
+        claveItemProveedor(i.sku_proveedor, i.descripcion_proveedor) !== '' &&
         (i.match_confidence === 'manual' || i.match_confidence === 'nombre')
       )
       for (const m of newMappings) {
         await supabase.from('proveedor_sku_map').upsert({
           proveedor_nombre     : factura.proveedor_nombre,
-          sku_proveedor        : m.sku_proveedor,
+          sku_proveedor        : claveItemProveedor(m.sku_proveedor, m.descripcion_proveedor),
           descripcion_proveedor: m.descripcion_proveedor,
           producto_id          : m.producto_id,
           creado_por           : 'auto',
