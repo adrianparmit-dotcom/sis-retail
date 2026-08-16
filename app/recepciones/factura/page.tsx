@@ -28,6 +28,7 @@ import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
 import { hoyISO } from '@/lib/format'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { normalizeText } from '@/lib/search'
+import { construirIndiceAlias, mismoProveedor } from '@/lib/proveedores'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -63,6 +64,13 @@ interface Producto {
 }
 
 type Step = 'paste' | 'review' | 'done'
+
+// Fila de proveedores_aliases con el nombre canónico traído por join.
+interface AliasRow {
+  nombre_dux: string | null
+  nombre_normalizado: string | null
+  proveedores_config: { nombre: string | null } | null
+}
 
 // ── DateSelector ─────────────────────────────────────────────────
 
@@ -599,6 +607,8 @@ export default function RecepcionFacturaPage() {
   // DB data
   const [productos, setProductos]             = useState<Producto[]>([])
   const [skuMap, setSkuMap]                   = useState<SkuMapEntry[]>([])
+  // Alias de proveedor (nombre alternativo → nombre canónico), ya en clave dura.
+  const [aliasProveedor, setAliasProveedor]   = useState<Map<string, string>>(new Map())
   const [margenProveedor, setMargenProveedor] = useState<number>(0.40)
   const [loadingProds, setLoadingProds]       = useState(true)
 
@@ -617,6 +627,16 @@ export default function RecepcionFacturaPage() {
   const [duxRetryOk, setDuxRetryOk]           = useState(false)
   const [priceExcelUrl, setPriceExcelUrl]     = useState<string | null>(null)
   const [priceExcelCount, setPriceExcelCount] = useState(0)
+  // Envío de precios por API. No se dispara solo: cambiar precios de venta es
+  // consecuencia directa sobre lo que cobra la caja, así que lo confirma alguien.
+  const [preciosPayload, setPreciosPayload]   = useState<{ codigo: string; importe: number }[]>([])
+  const [enviandoPrecios, setEnviandoPrecios] = useState(false)
+  const [preciosEnviados, setPreciosEnviados] = useState(false)
+  const [preciosProcesoId, setPreciosProcesoId] = useState<string | null>(null)
+  const [preciosError, setPreciosError]       = useState<string | null>(null)
+  // Mapear es el primer paso real y el que traba todo lo demás: poder aislar
+  // los que faltan evita ir cazándolos entre 50 filas.
+  const [soloSinAsignar, setSoloSinAsignar]   = useState(false)
   const [transferenciaId, setTransferenciaId] = useState<string | null>(null)
   const [loadingPdf, setLoadingPdf]           = useState(false)
   const [docProveedor, setDocProveedor]       = useState<DocumentoProveedor | null>(null)
@@ -692,15 +712,27 @@ export default function RecepcionFacturaPage() {
       setLoadingProds(true)
       // productos tiene >3000 filas: sin paginar, el matching por sku_map fallaba
       // en silencio para todo producto fuera de las primeras 1000 filas.
-      const [prods, mapRows] = await Promise.all([
+      const [prods, mapRows, aliasRows] = await Promise.all([
         fetchAllFromView<Producto>('productos', {
           select: 'id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria',
           order: { column: 'nombre' },
         }),
         fetchAllFromView<SkuMapEntry>('proveedor_sku_map'),
+        // Alias declarados a mano: resuelven nombres que no se parecen entre sí
+        // (ej. "SEDRAN, RAUL HUGO" y "Distribuidora Saludable - Raul Hugo Sedran").
+        // Hoy la tabla está vacía; queda listo para cuando se carguen.
+        supabase.from('proveedores_aliases')
+          .select('nombre_dux, nombre_normalizado, proveedores_config(nombre)')
+          .then(r => r.data ?? []),
       ])
       setProductos(prods)
       setSkuMap(mapRows)
+      setAliasProveedor(construirIndiceAlias(
+        (aliasRows as unknown as AliasRow[]).map(a => ({
+          nombre_normalizado: a.nombre_normalizado ?? a.nombre_dux,
+          config_nombre     : a.proveedores_config?.nombre ?? null,
+        }))
+      ))
       setLoadingProds(false)
     }
     load()
@@ -901,8 +933,11 @@ export default function RecepcionFacturaPage() {
   function matchItem(item: InvoiceLineItem, proveedorNombre: string): InvoiceLineItem {
     // Only use learned mappings — supplier sku previously matched manually by an operator.
     // No automatic matching by barcode / codigo_externo / SKU / fuzzy name.
+    // Comparar por clave dura (sin puntuación ni mayúsculas) + alias: si no,
+    // "Shuk S.R.L" no encuentra lo aprendido bajo "SHUK S.R.L." y la factura
+    // entera queda sin mapear.
     const mapEntry = skuMap.find(
-      e => e.proveedor_nombre.toLowerCase() === proveedorNombre.toLowerCase()
+      e => mismoProveedor(e.proveedor_nombre, proveedorNombre, aliasProveedor)
         && e.sku_proveedor === item.sku_proveedor
     )
     if (mapEntry?.producto_id) {
@@ -1235,6 +1270,31 @@ export default function RecepcionFacturaPage() {
     return { msg: `Dux ${res.status}: ${msg}`, detail }
   }
 
+  async function enviarPreciosADux() {
+    if (preciosPayload.length === 0) return
+    setEnviandoPrecios(true)
+    setPreciosError(null)
+    try {
+      const res = await fetch('/api/dux/precios', {
+        method : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify({ items: preciosPayload }),
+      })
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>
+      if (!res.ok) {
+        setPreciosError((data.error as string) ?? 'Dux rechazó la actualización de precios')
+      } else {
+        setPreciosEnviados(true)
+        setPreciosProcesoId((data.id_proceso as string) ?? null)
+        toast.success(`${data.enviados} precios enviados a Dux`)
+      }
+    } catch {
+      setPreciosError('No se pudo contactar a Dux. Usá el Excel como alternativa.')
+    } finally {
+      setEnviandoPrecios(false)
+    }
+  }
+
   async function retryDux() {
     if (!duxPayloadRetry) return
     setRetryingDux(true)
@@ -1286,6 +1346,29 @@ export default function RecepcionFacturaPage() {
         { duration: 10000 },
       )
       return
+    }
+
+    // Sin NINGÚN ítem asignado la recepción no sirve aguas abajo: no va a Dux,
+    // no genera vencimientos y no actualiza costos. Se bloquea.
+    const asignados = items.filter(i => i.producto_id || (i.es_granel && (i.derivados?.length ?? 0) > 0))
+    if (asignados.length === 0) {
+      toast.error(
+        'No hay ningún ítem asignado a un producto. Así la recepción no llega a Dux, ' +
+        'no genera vencimientos y no actualiza costos. Asigná al menos uno con "+ Asignar".',
+        { duration: 10000 },
+      )
+      return
+    }
+
+    // Con algunos sin asignar, pedir confirmación explícita diciendo qué se pierde.
+    const sinAsignar = items.length - asignados.length
+    if (sinAsignar > 0) {
+      const ok = window.confirm(
+        `${sinAsignar} de ${items.length} ítems quedaron sin asignar a un producto.\n\n` +
+        'Esos ítems NO van a llegar a Dux, NO generan vencimiento y NO actualizan el costo.\n\n' +
+        '¿Confirmar igual?'
+      )
+      if (!ok) return
     }
 
     setSaving(true)
@@ -1506,6 +1589,11 @@ export default function RecepcionFacturaPage() {
             // Alícuota de la línea: sin esto Dux aplica la del maestro del ítem
             // e ignora el IVA que se cargó acá (21 vs 10.5).
             iva_porcentaje  : i.iva_porcentaje,
+            // Lo que realmente entró, que puede diferir de lo facturado. Dux
+            // lleva esto en ctd_recepcionada; antes la diferencia se quedaba
+            // en SOHO y el faltante nunca llegaba al ERP para reclamarlo.
+            // En granel la cantidad física es la de factura, no la fraccionada.
+            cantidad_recibida: i.es_granel ? i.cantidad : i.cantidad_recibida,
           })),
         }
 
@@ -1533,6 +1621,8 @@ export default function RecepcionFacturaPage() {
         if (res.ok) {
           setPriceExcelUrl(URL.createObjectURL(await res.blob()))
           setPriceExcelCount(priceItems.length)
+          // Mismo set de precios, listo para mandarlo por API si lo confirman.
+          setPreciosPayload(priceItems.map(i => ({ codigo: i.producto_sku!, importe: i.precio_venta_sugerido })))
         }
       }
 
@@ -1810,6 +1900,20 @@ export default function RecepcionFacturaPage() {
         </div>
 
         {/* Table */}
+        {stats.pendientes > 0 && (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant={soloSinAsignar ? 'default' : 'outline'}
+              onClick={() => setSoloSinAsignar(v => !v)}
+            >
+              {soloSinAsignar
+                ? `Viendo solo los ${stats.pendientes} sin asignar — ver todos`
+                : `Ver solo los ${stats.pendientes} sin asignar`}
+            </Button>
+          </div>
+        )}
+
         <div className="bg-white rounded-lg border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1832,6 +1936,10 @@ export default function RecepcionFacturaPage() {
               </thead>
               <tbody>
                 {items.map((item, i) => {
+                  // Filtro "solo sin asignar": se ocultan las filas ya resueltas
+                  // en vez de sacarlas del array, así los índices que usan los
+                  // handlers de edición siguen apuntando al ítem correcto.
+                  if (soloSinAsignar && (item.producto_id || item.es_granel)) return null
                   const rowCls = item.es_granel
                     ? 'bg-emerald-50'
                     : !item.producto_id
@@ -2094,6 +2202,35 @@ export default function RecepcionFacturaPage() {
           </p>
         </div>
 
+        {/* Estado del mapeo: antes había que deducirlo mirando fila por fila, y
+            se confirmaron recepciones enteras con el 100% sin asignar. */}
+        <div className={`rounded-lg border px-4 py-3 ${
+          stats.pendientes === 0
+            ? 'border-emerald-200 bg-emerald-50'
+            : stats.mapeados === 0
+            ? 'border-red-300 bg-red-50'
+            : 'border-amber-200 bg-amber-50'
+        }`}>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="text-sm">
+              <span className={`font-semibold ${
+                stats.pendientes === 0 ? 'text-emerald-800' : stats.mapeados === 0 ? 'text-red-800' : 'text-amber-900'
+              }`}>
+                {stats.mapeados} de {stats.total} ítems asignados a un producto
+              </span>
+              {stats.pendientes > 0 && (
+                <p className={`text-xs mt-1 ${stats.mapeados === 0 ? 'text-red-700' : 'text-amber-800'}`}>
+                  {stats.pendientes === 1 ? 'El ítem sin asignar' : `Los ${stats.pendientes} ítems sin asignar`}
+                  {' '}no van a llegar a Dux, no generan vencimiento y no actualizan el costo.
+                </p>
+              )}
+            </div>
+            {stats.pendientes === 0 && (
+              <span className="text-xs font-medium text-emerald-700 shrink-0">✓ Todo listo para confirmar</span>
+            )}
+          </div>
+        </div>
+
         <div className="flex justify-between items-center">
           <p className="text-xs text-zinc-400">Los granel NO crean vencimientos acá — se crean en Fraccionamiento.</p>
           <div className="flex gap-2">
@@ -2185,12 +2322,31 @@ export default function RecepcionFacturaPage() {
         {priceExcelUrl && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-semibold text-amber-800 mb-1">💰 {priceExcelCount} precios para actualizar en Dux</p>
-            <p className="text-xs text-amber-700 mb-3">Dux → Configuración → Artículos → Actualización masiva de precios → subí este archivo</p>
-            <a href={priceExcelUrl} download={`dux_precios_${hoyISO()}.xlsx`}>
-              <Button size="sm" className="flex items-center gap-2">
-                <Download size={14} />Descargar Excel de precios
-              </Button>
-            </a>
+            {preciosEnviados ? (
+              <p className="text-xs text-emerald-700 font-medium">
+                ✓ Enviados a Dux{preciosProcesoId ? ` — proceso ${preciosProcesoId}` : ''}.
+                Dux los aplica en unos minutos; si no aparecen, usá el Excel.
+              </p>
+            ) : (
+              <p className="text-xs text-amber-700 mb-3">
+                Se actualiza la lista <strong>CONSUMIDOR FINAL</strong>. Revisá los precios antes de enviar.
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              {!preciosEnviados && (
+                <Button size="sm" className="flex items-center gap-2" disabled={enviandoPrecios} onClick={enviarPreciosADux}>
+                  {enviandoPrecios
+                    ? <><Loader2 size={14} className="animate-spin" />Enviando...</>
+                    : <>💰 Enviar precios a Dux</>}
+                </Button>
+              )}
+              <a href={priceExcelUrl} download={`dux_precios_${hoyISO()}.xlsx`}>
+                <Button size="sm" variant="outline" className="flex items-center gap-2">
+                  <Download size={14} />{preciosEnviados ? 'Excel de respaldo' : 'Bajar Excel'}
+                </Button>
+              </a>
+            </div>
+            {preciosError && <p className="text-xs text-red-700 mt-2">{preciosError}</p>}
           </div>
         )}
 

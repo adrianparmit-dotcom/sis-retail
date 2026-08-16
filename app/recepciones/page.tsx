@@ -40,21 +40,60 @@ function contarItems(r: RecepcionConItems): number {
   return r.recepcion_items?.[0]?.count ?? 0
 }
 
+interface ItemEtapa {
+  recepcion_id: string
+  producto_id: string | null
+  fecha_vencimiento: string | null
+  es_granel: boolean | null
+}
+
+interface EtapaBorrador { total: number; sinAsignar: number; sinFecha: number }
+
+/** En qué se quedó trabado el borrador, en el orden en que hay que resolverlo. */
+function describirEtapa(e: EtapaBorrador | undefined): { texto: string; className: string } {
+  if (!e || e.total === 0) return { texto: 'Vacío — sin ítems', className: 'text-zinc-500' }
+  if (e.sinAsignar > 0)   return { texto: `Falta asignar ${e.sinAsignar} de ${e.total} ítems`, className: 'text-red-700' }
+  if (e.sinFecha > 0)     return { texto: `Faltan ${e.sinFecha} fechas de vencimiento`, className: 'text-amber-700' }
+  return { texto: 'Listo para confirmar', className: 'text-emerald-700' }
+}
+
 export default function RecepcionesPage() {
   const [data, setData]       = useState<RecepcionConItems[]>([])
   const [loading, setLoading] = useState(true)
   const [aDescartar, setADescartar] = useState<RecepcionConItems | null>(null)
   const [borrando, setBorrando] = useState(false)
+  const [etapas, setEtapas] = useState<Map<string, EtapaBorrador>>(new Map())
 
   useEffect(() => {
-    supabase.from('recepciones')
-      .select('*, recepcion_items(count)')
-      .order('created_at', { ascending: false })
-      .limit(100)
-      .then(({ data }) => {
-        setData((data ?? []) as RecepcionConItems[])
-        setLoading(false)
-      })
+    const cargar = async () => {
+      const { data } = await supabase.from('recepciones')
+        .select('*, recepcion_items(count)')
+        .order('created_at', { ascending: false })
+        .limit(100)
+      const filas = (data ?? []) as RecepcionConItems[]
+      setData(filas)
+      setLoading(false)
+
+      // Para los borradores, mirar sus ítems y decir en qué etapa quedaron.
+      // Antes todos decían lo mismo ("pendiente de completar") y había que
+      // entrar a cada uno para saber qué faltaba.
+      const ids = filas.filter(r => r.estado === 'borrador').map(r => r.id)
+      if (ids.length === 0) return
+      const { data: its } = await supabase.from('recepcion_items')
+        .select('recepcion_id, producto_id, fecha_vencimiento, es_granel')
+        .in('recepcion_id', ids)
+      const porRec = new Map<string, EtapaBorrador>()
+      for (const id of ids) porRec.set(id, { total: 0, sinAsignar: 0, sinFecha: 0 })
+      for (const it of (its ?? []) as ItemEtapa[]) {
+        const e = porRec.get(it.recepcion_id)
+        if (!e) continue
+        e.total++
+        if (!it.producto_id && !it.es_granel) e.sinAsignar++
+        else if (!it.es_granel && it.producto_id && !it.fecha_vencimiento) e.sinFecha++
+      }
+      setEtapas(porRec)
+    }
+    cargar()
   }, [])
 
   async function descartarBorrador() {
@@ -128,6 +167,10 @@ export default function RecepcionesPage() {
                     Factura: {fmtFecha(r.fecha_factura)} · Guardado: {fmtFecha(r.fecha_recepcion)}
                     {' · '}{contarItems(r)} ítem{contarItems(r) === 1 ? '' : 's'}
                   </div>
+                  {(() => {
+                    const et = describirEtapa(etapas.get(r.id))
+                    return <div className={`text-xs font-medium mt-1 ${et.className}`}>{et.texto}</div>
+                  })()}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <Link href={`/recepciones/factura?borrador=${r.id}`}>

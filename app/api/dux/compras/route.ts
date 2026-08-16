@@ -69,8 +69,14 @@ export async function POST(req: NextRequest) {
   //   - Filtrar cant=0 o precio=0
   //   - Mergear duplicados por (cod_item + alícuota): agrupar solo por cod_item
   //     mezclaría líneas de 21% y 10.5% en una sola con IVA equivocado.
-  type ClientItem = { id_item: string; cantidad: number; precio_unitario: number; iva_porcentaje?: number }
-  type DuxItem    = { cod_item: string; ctd: number; precio_unitario: number; porc_descuento: number; porc_iva?: number }
+  type ClientItem = {
+    id_item: string; cantidad: number; precio_unitario: number
+    iva_porcentaje?: number; cantidad_recibida?: number
+  }
+  type DuxItem = {
+    cod_item: string; ctd: number; precio_unitario: number; porc_descuento: number
+    porc_iva?: number; ctd_recepcionada?: number
+  }
 
   // Alícuotas que acepta Dux. Cualquier otra se omite y el ERP usa la del maestro.
   const IVA_VALIDAS = new Set([0, 2.5, 10.5, 21, 27])
@@ -84,19 +90,29 @@ export async function POST(req: NextRequest) {
   const validos = productosRaw.filter(p => p.cantidad > 0 && p.precio_unitario > 0)
 
   // Merge duplicates by cod_item + IVA: sum ctd, weighted-average price
-  const merged = new Map<string, { cod_item: string; iva: number | null; ctd: number; total_valor: number }>()
+  const merged = new Map<string, {
+    cod_item: string; iva: number | null; ctd: number; total_valor: number
+    recibida: number; hayRecibida: boolean
+  }>()
   for (const p of validos) {
     const iva = typeof p.iva_porcentaje === 'number' && IVA_VALIDAS.has(p.iva_porcentaje)
       ? p.iva_porcentaje
       : null
     const cod = String(p.id_item)
     const key = `${cod}__${iva ?? 'maestro'}`
+    const tieneRec = Number.isFinite(p.cantidad_recibida)
+    const rec = tieneRec ? Number(p.cantidad_recibida) : p.cantidad
     const ex  = merged.get(key)
     if (ex) {
       ex.total_valor += p.precio_unitario * p.cantidad
       ex.ctd         += p.cantidad
+      ex.recibida    += rec
+      ex.hayRecibida  = ex.hayRecibida || tieneRec
     } else {
-      merged.set(key, { cod_item: cod, iva, ctd: p.cantidad, total_valor: p.precio_unitario * p.cantidad })
+      merged.set(key, {
+        cod_item: cod, iva, ctd: p.cantidad, total_valor: p.precio_unitario * p.cantidad,
+        recibida: rec, hayRecibida: tieneRec,
+      })
     }
   }
 
@@ -106,6 +122,9 @@ export async function POST(req: NextRequest) {
     precio_unitario: Math.round(v.total_valor / v.ctd * 100) / 100,
     porc_descuento : 0,
     ...(v.iva !== null ? { porc_iva: v.iva } : {}),
+    // Solo se informa si difiere de lo facturado: mandarla siempre igual no
+    // aporta nada y agranda el payload.
+    ...(v.hayRecibida && v.recibida !== v.ctd ? { ctd_recepcionada: v.recibida } : {}),
   }))
 
   if (productosFinal.length === 0) {
