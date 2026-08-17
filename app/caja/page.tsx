@@ -27,6 +27,8 @@ interface Movimiento {
   fecha: string; sucursal: string; concepto: string; persona: string; monto: number
 }
 interface Cierre {
+  /** `fecha|sucursal|persona` — clave con la que se recuerda el tilde. */
+  clave: string
   fecha: string; sucursal: string; persona: string
   efectivo: number; otros: number; total: number; tickets: number
 }
@@ -54,6 +56,27 @@ interface ProvCfg { id: string; nombre: string; paga_en_efectivo: boolean }
 
 const $ = (n: number) => '$' + Math.round(n).toLocaleString('es-AR')
 
+/** Casilla de "ya lo controlé contra el papel". Se usa en cierres y en gastos. */
+function CheckControl({ ok, onClick, disabled }: {
+  ok: boolean; onClick: () => void; disabled?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={ok}
+      title={ok ? 'Marcado como controlado' : 'Marcar como controlado'}
+      className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors disabled:opacity-30 ${
+        ok
+          ? 'bg-emerald-600 border-emerald-600 text-white'
+          : 'border-zinc-300 bg-white hover:border-emerald-400 hover:bg-emerald-50'
+      }`}
+    >
+      {ok && <Check size={13} strokeWidth={3} />}
+    </button>
+  )
+}
+
 /** Primer día del mes actual, para arrancar con un período razonable. */
 function inicioDeMes(): string {
   const h = hoyISO()
@@ -72,9 +95,10 @@ export default function CajaPage() {
   const [provs, setProvs] = useState<ProvCfg[]>([])
   const [verConfig, setVerConfig] = useState(false)
 
-  // Pagos ya cruzados contra los papeles que anotan las chicas en el local.
-  // Persistido por id_pago, así que el tilde sobrevive a regenerar el informe.
+  // Movimientos ya cruzados contra el papel. Persistidos, así que el tilde
+  // sobrevive a regenerar el informe, cambiar el rango o cerrar la pantalla.
   const [controlados, setControlados] = useState<Set<number>>(new Set())
+  const [cierresOk, setCierresOk] = useState<Set<string>>(new Set())
 
   const cargarProvs = useCallback(async () => {
     const { data: d } = await supabase.from('proveedores_config')
@@ -92,11 +116,18 @@ export default function CajaPage() {
       const informe = j as Informe
       setData(informe)
 
-      const ids = informe.salidas.detalle.map(m => m.id).filter((x): x is number => typeof x === 'number')
-      if (ids.length === 0) { setControlados(new Set()); return }
-      const { data: marcas } = await supabase
-        .from('caja_pagos_controlados').select('id_pago').in('id_pago', ids)
-      setControlados(new Set((marcas ?? []).map((m: { id_pago: number }) => m.id_pago)))
+      const ids    = informe.salidas.detalle.map(m => m.id).filter((x): x is number => typeof x === 'number')
+      const claves = informe.cierres.map(c => c.clave)
+      const [pagos, cierres] = await Promise.all([
+        ids.length
+          ? supabase.from('caja_pagos_controlados').select('id_pago').in('id_pago', ids)
+          : Promise.resolve({ data: [] as { id_pago: number }[] }),
+        claves.length
+          ? supabase.from('caja_cierres_controlados').select('clave').in('clave', claves)
+          : Promise.resolve({ data: [] as { clave: string }[] }),
+      ])
+      setControlados(new Set((pagos.data ?? []).map((m: { id_pago: number }) => m.id_pago)))
+      setCierresOk (new Set((cierres.data ?? []).map((c: { clave: string }) => c.clave)))
     } catch {
       setError('No se pudo contactar el servidor')
     } finally {
@@ -113,28 +144,27 @@ export default function CajaPage() {
     toast.success(`${toTitleCase(p.nombre)}: ${nuevo ? 'efectivo' : 'transferencia'}`)
   }
 
-  /** Tilda o destilda un pago contra el papel del local. Optimista: se marca en
-   *  pantalla y si la escritura falla se vuelve atrás, para que tildar 40 pagos
-   *  seguidos no se sienta lento. */
-  async function toggleControlado(m: Movimiento) {
-    if (m.id === undefined) return
-    const id = m.id
-    const estaba = controlados.has(id)
-    setControlados(s => {
+  /** Tilda o destilda una fila contra el papel del local. Optimista: se marca en
+   *  pantalla y si la escritura falla se vuelve atrás, para que tildar 40 filas
+   *  seguidas no se sienta lento. Sirve para pagos y para cierres. */
+  async function toggleMarca<T extends string | number>(
+    clave: T,
+    marcadas: Set<T>,
+    setMarcadas: React.Dispatch<React.SetStateAction<Set<T>>>,
+    persistir: (estaba: boolean) => PromiseLike<{ error: { message: string } | null }>,
+  ) {
+    const estaba = marcadas.has(clave)
+    // Su propio inverso: aplicarlo dos veces deja el set como estaba.
+    const alternar = (s: Set<T>) => {
       const n = new Set(s)
-      if (estaba) n.delete(id); else n.add(id)
+      if (estaba) n.delete(clave); else n.add(clave)
       return n
-    })
-    const { error: e } = estaba
-      ? await supabase.from('caja_pagos_controlados').delete().eq('id_pago', id)
-      : await supabase.from('caja_pagos_controlados').insert({ id_pago: id })
+    }
+    setMarcadas(alternar)
+    const { error: e } = await persistir(estaba)
     if (e) {
       toast.error('No se pudo guardar la marca: ' + e.message)
-      setControlados(s => {
-        const n = new Set(s)
-        if (estaba) n.add(id); else n.delete(id)
-        return n
-      })
+      setMarcadas(alternar)
     }
   }
 
@@ -159,6 +189,7 @@ export default function CajaPage() {
   function exportarCierres() {
     if (!data) return
     const cols: ColumnaExport<Cierre>[] = [
+      { header: 'Controlado',   value: c => cierresOk.has(c.clave) ? 'Sí' : '' },
       { header: 'Fecha',        value: c => formatDate(c.fecha) },
       { header: 'Sucursal',     value: c => c.sucursal },
       { header: 'Quién cobró',  value: c => toTitleCase(c.persona) },
@@ -179,6 +210,12 @@ export default function CajaPage() {
   const controladoTotal   = detalle.filter(esControlado).reduce((s, m) => s + m.monto, 0)
   const pendienteTotal    = detalle.filter(m => !esControlado(m)).reduce((s, m) => s + m.monto, 0)
   const controladosEnInforme = detalle.filter(esControlado).length
+
+  // Lo mismo para los cierres: se miden por el efectivo del turno.
+  const cierres = data?.cierres ?? []
+  const cierreControlado = cierres.filter(c =>  cierresOk.has(c.clave)).reduce((s, c) => s + c.efectivo, 0)
+  const cierrePendiente  = cierres.filter(c => !cierresOk.has(c.clave)).reduce((s, c) => s + c.efectivo, 0)
+  const cierresTildados  = cierres.filter(c =>  cierresOk.has(c.clave)).length
 
   return (
     <div className="p-6 md:p-8 space-y-6">
@@ -352,19 +389,33 @@ export default function CajaPage() {
 
           {/* Resumen por turno */}
           <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-zinc-100">
-              <p className="text-sm font-semibold text-zinc-800">
-                Cierres por turno <span className="font-normal text-zinc-400">({data.cierres.length})</span>
-              </p>
-              <p className="text-xs text-zinc-500 mt-0.5">
-                Sumado comprobante por comprobante. Es lo <strong>vendido</strong> en efectivo — en la caja
-                grande va a haber menos, porque queda fondo de cambio en la sucursal.
-              </p>
+            <div className="px-4 py-3 border-b border-zinc-100 flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <p className="text-sm font-semibold text-zinc-800">
+                  Cierres por turno <span className="font-normal text-zinc-400">({data.cierres.length})</span>
+                </p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Sumado comprobante por comprobante. Es lo <strong>vendido</strong> en efectivo — en la caja
+                  grande va a haber menos, porque queda fondo de cambio en la sucursal.
+                </p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-xs text-zinc-500">
+                  Controlado <strong className="text-zinc-800 tabular-nums">{$(cierreControlado)}</strong>
+                  {' · '}Falta <strong className={`tabular-nums ${cierrePendiente > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                    {$(cierrePendiente)}
+                  </strong>
+                </p>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  {cierresTildados} de {data.cierres.length} tildados
+                </p>
+              </div>
             </div>
             <div className="overflow-x-auto row-hover">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-zinc-50 hover:bg-zinc-50">
+                    <TableHead className="w-10"><span className="sr-only">Controlado</span></TableHead>
                     <TableHead>Fecha</TableHead>
                     <TableHead>Sucursal</TableHead>
                     <TableHead>Quién cobró</TableHead>
@@ -375,17 +426,33 @@ export default function CajaPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.cierres.map((c, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="tabular-nums text-sm">{formatDate(c.fecha)}</TableCell>
-                      <TableCell className="text-sm">{c.sucursal}</TableCell>
-                      <TableCell className="text-sm">{toTitleCase(c.persona)}</TableCell>
-                      <TableCell className="text-right tabular-nums font-semibold text-emerald-800">{$(c.efectivo)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-zinc-500">{$(c.otros)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{$(c.total)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-zinc-500">{c.tickets}</TableCell>
-                    </TableRow>
-                  ))}
+                  {data.cierres.map(c => {
+                    const ok = cierresOk.has(c.clave)
+                    return (
+                      <TableRow key={c.clave} className={ok ? 'bg-emerald-50/40' : undefined}>
+                        <TableCell>
+                          <CheckControl
+                            ok={ok}
+                            onClick={() => toggleMarca(
+                              c.clave, cierresOk, setCierresOk,
+                              estaba => estaba
+                                ? supabase.from('caja_cierres_controlados').delete().eq('clave', c.clave)
+                                : supabase.from('caja_cierres_controlados').insert({ clave: c.clave }),
+                            )}
+                          />
+                        </TableCell>
+                        <TableCell className="tabular-nums text-sm">{formatDate(c.fecha)}</TableCell>
+                        <TableCell className="text-sm">{c.sucursal}</TableCell>
+                        <TableCell className="text-sm">{toTitleCase(c.persona)}</TableCell>
+                        <TableCell className={`text-right tabular-nums font-semibold ${ok ? 'text-zinc-400 line-through' : 'text-emerald-800'}`}>
+                          {$(c.efectivo)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-zinc-500">{$(c.otros)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{$(c.total)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-zinc-500">{c.tickets}</TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -432,19 +499,16 @@ export default function CajaPage() {
                     return (
                       <TableRow key={m.id ?? i} className={ok ? 'bg-emerald-50/40' : undefined}>
                         <TableCell>
-                          <button
-                            onClick={() => toggleControlado(m)}
+                          <CheckControl
+                            ok={ok}
                             disabled={m.id === undefined}
-                            aria-pressed={ok}
-                            title={ok ? 'Marcado como controlado' : 'Marcar como controlado'}
-                            className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors disabled:opacity-30 ${
-                              ok
-                                ? 'bg-emerald-600 border-emerald-600 text-white'
-                                : 'border-zinc-300 bg-white hover:border-emerald-400 hover:bg-emerald-50'
-                            }`}
-                          >
-                            {ok && <Check size={13} strokeWidth={3} />}
-                          </button>
+                            onClick={() => m.id !== undefined && toggleMarca(
+                              m.id, controlados, setControlados,
+                              estaba => estaba
+                                ? supabase.from('caja_pagos_controlados').delete().eq('id_pago', m.id)
+                                : supabase.from('caja_pagos_controlados').insert({ id_pago: m.id }),
+                            )}
+                          />
                         </TableCell>
                         <TableCell className="tabular-nums text-sm">{formatDate(m.fecha)}</TableCell>
                         <TableCell className="text-sm">{m.sucursal}</TableCell>

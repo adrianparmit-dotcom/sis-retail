@@ -82,6 +82,10 @@ interface Movimiento {
  *  comprobantes. Es lo VENDIDO en efectivo, no lo que se movió a la caja
  *  grande — parte queda como fondo de cambio en la sucursal. */
 interface Cierre {
+  /** `fecha|sucursal|persona` — la misma clave con la que se agrupa el turno.
+   *  Como el turno no existe como entidad en Dux, no hay id: esta clave es lo
+   *  que permite recordar qué cierres ya se controlaron contra el papel. */
+  clave: string
   fecha: string; sucursal: string; persona: string
   efectivo: number; otros: number; total: number; tickets: number
 }
@@ -142,7 +146,7 @@ export async function GET(req: NextRequest) {
       // El turno cuenta TODOS los cobros, no solo los de efectivo: sirve para
       // ver qué parte del día se cobró en billetes y qué parte no.
       const key = `${fecha}|${suc}|${persona}`
-      const t = porTurno.get(key) ?? { fecha, sucursal: suc, persona, efectivo: 0, otros: 0, total: 0, tickets: 0 }
+      const t = porTurno.get(key) ?? { clave: key, fecha, sucursal: suc, persona, efectivo: 0, otros: 0, total: 0, tickets: 0 }
       t.efectivo += efectivo
       t.otros    += Math.max(0, total - efectivo)
       t.total    += total
