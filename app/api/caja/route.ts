@@ -68,7 +68,11 @@ async function duxTodo(path: string, desde: string, hasta: string, sucursal?: nu
   return sucursal ? filas.filter(f => Number(f.id_sucursal) === sucursal) : filas
 }
 
+/** `id` es el `id_pago` de Dux — identificador estable del movimiento, usado
+ *  para recordar qué pagos ya se cruzaron contra los papeles del local.
+ *  Los cobros no lo llevan (no se tildan), por eso es opcional. */
 interface Movimiento {
+  id?: number
   fecha: string; sucursal: string; concepto: string; persona: string; monto: number
 }
 
@@ -171,6 +175,7 @@ export async function GET(req: NextRequest) {
       if (!enEfectivo.has(clave(prov))) { excluidos.push({ proveedor: prov, monto }); continue }
       const suc = SUCURSALES[Number(p.id_sucursal)] ?? `Sucursal ${p.id_sucursal}`
       salidas.push({
+        id      : Number(p.id_pago),
         fecha   : String(p.fecha ?? ''),
         sucursal: suc,
         concepto: prov,

@@ -19,9 +19,11 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { exportTablaXlsx, type ColumnaExport } from '@/lib/export-xlsx'
 import { formatDate, hoyISO, toTitleCase } from '@/lib/format'
-import { Loader2, Download, Wallet } from 'lucide-react'
+import { Loader2, Download, Wallet, Check } from 'lucide-react'
 
 interface Movimiento {
+  /** id_pago de Dux — clave con la que se recuerda el tilde de control. */
+  id?: number
   fecha: string; sucursal: string; concepto: string; persona: string; monto: number
 }
 interface Cierre {
@@ -70,6 +72,10 @@ export default function CajaPage() {
   const [provs, setProvs] = useState<ProvCfg[]>([])
   const [verConfig, setVerConfig] = useState(false)
 
+  // Pagos ya cruzados contra los papeles que anotan las chicas en el local.
+  // Persistido por id_pago, así que el tilde sobrevive a regenerar el informe.
+  const [controlados, setControlados] = useState<Set<number>>(new Set())
+
   const cargarProvs = useCallback(async () => {
     const { data: d } = await supabase.from('proveedores_config')
       .select('id, nombre, paga_en_efectivo').order('nombre')
@@ -82,8 +88,15 @@ export default function CajaPage() {
     try {
       const res = await fetch(`/api/caja?desde=${desde}&hasta=${hasta}${sucursal ? `&sucursal=${sucursal}` : ''}`)
       const j = await res.json()
-      if (!res.ok) { setError(j.error ?? 'No se pudo generar el informe'); setData(null) }
-      else setData(j as Informe)
+      if (!res.ok) { setError(j.error ?? 'No se pudo generar el informe'); setData(null); return }
+      const informe = j as Informe
+      setData(informe)
+
+      const ids = informe.salidas.detalle.map(m => m.id).filter((x): x is number => typeof x === 'number')
+      if (ids.length === 0) { setControlados(new Set()); return }
+      const { data: marcas } = await supabase
+        .from('caja_pagos_controlados').select('id_pago').in('id_pago', ids)
+      setControlados(new Set((marcas ?? []).map((m: { id_pago: number }) => m.id_pago)))
     } catch {
       setError('No se pudo contactar el servidor')
     } finally {
@@ -100,6 +113,31 @@ export default function CajaPage() {
     toast.success(`${toTitleCase(p.nombre)}: ${nuevo ? 'efectivo' : 'transferencia'}`)
   }
 
+  /** Tilda o destilda un pago contra el papel del local. Optimista: se marca en
+   *  pantalla y si la escritura falla se vuelve atrás, para que tildar 40 pagos
+   *  seguidos no se sienta lento. */
+  async function toggleControlado(m: Movimiento) {
+    if (m.id === undefined) return
+    const id = m.id
+    const estaba = controlados.has(id)
+    setControlados(s => {
+      const n = new Set(s)
+      if (estaba) n.delete(id); else n.add(id)
+      return n
+    })
+    const { error: e } = estaba
+      ? await supabase.from('caja_pagos_controlados').delete().eq('id_pago', id)
+      : await supabase.from('caja_pagos_controlados').insert({ id_pago: id })
+    if (e) {
+      toast.error('No se pudo guardar la marca: ' + e.message)
+      setControlados(s => {
+        const n = new Set(s)
+        if (estaba) n.add(id); else n.delete(id)
+        return n
+      })
+    }
+  }
+
   /** Sufijo de archivo: el informe se saca por local, así que los Excel de
    *  una sucursal y otra no pueden pisarse en la carpeta de descargas. */
   const nombreArchivo = (base: string) =>
@@ -108,11 +146,12 @@ export default function CajaPage() {
   function exportarPagos() {
     if (!data) return
     const cols: ColumnaExport<Movimiento>[] = [
-      { header: 'Fecha',     value: m => formatDate(m.fecha) },
-      { header: 'Sucursal',  value: m => m.sucursal },
-      { header: 'Proveedor', value: m => m.concepto },
-      { header: 'Caja',      value: m => m.persona },
-      { header: 'Monto',     value: m => m.monto },
+      { header: 'Controlado', value: m => m.id !== undefined && controlados.has(m.id) ? 'Sí' : '' },
+      { header: 'Fecha',      value: m => formatDate(m.fecha) },
+      { header: 'Sucursal',   value: m => m.sucursal },
+      { header: 'Proveedor',  value: m => m.concepto },
+      { header: 'Caja',       value: m => m.persona },
+      { header: 'Monto',      value: m => m.monto },
     ]
     exportTablaXlsx(nombreArchivo('caja_pagos'), cols, data.salidas.detalle, 'Pagos en efectivo')
   }
@@ -133,6 +172,13 @@ export default function CajaPage() {
 
   const filas = (o: Record<string, number>) =>
     Object.entries(o).sort((a, b) => b[1] - a[1])
+
+  // Cuánto del gasto ya apareció en los papeles y cuánto falta encontrar.
+  const detalle = data?.salidas.detalle ?? []
+  const esControlado = (m: Movimiento) => m.id !== undefined && controlados.has(m.id)
+  const controladoTotal   = detalle.filter(esControlado).reduce((s, m) => s + m.monto, 0)
+  const pendienteTotal    = detalle.filter(m => !esControlado(m)).reduce((s, m) => s + m.monto, 0)
+  const controladosEnInforme = detalle.filter(esControlado).length
 
   return (
     <div className="p-6 md:p-8 space-y-6">
@@ -345,12 +391,34 @@ export default function CajaPage() {
             </div>
           </div>
 
-          {/* Detalle de pagos */}
+          {/* Detalle de pagos — se tilda contra los papeles del local */}
           <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-zinc-100 flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <p className="text-sm font-semibold text-zinc-800">
+                  Gastos en efectivo <span className="font-normal text-zinc-400">({data.salidas.detalle.length})</span>
+                </p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Tildá cada gasto que encuentres anotado en los papeles. La marca queda guardada.
+                </p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-xs text-zinc-500">
+                  Controlado <strong className="text-zinc-800 tabular-nums">{$(controladoTotal)}</strong>
+                  {' · '}Falta <strong className={`tabular-nums ${pendienteTotal > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                    {$(pendienteTotal)}
+                  </strong>
+                </p>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  {controladosEnInforme} de {data.salidas.detalle.length} tildados
+                </p>
+              </div>
+            </div>
             <div className="overflow-x-auto row-hover">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-zinc-50 hover:bg-zinc-50">
+                    <TableHead className="w-10"><span className="sr-only">Controlado</span></TableHead>
                     <TableHead>Fecha</TableHead>
                     <TableHead>Sucursal</TableHead>
                     <TableHead>Proveedor</TableHead>
@@ -359,15 +427,35 @@ export default function CajaPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.salidas.detalle.map((m, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="tabular-nums text-sm">{formatDate(m.fecha)}</TableCell>
-                      <TableCell className="text-sm">{m.sucursal}</TableCell>
-                      <TableCell className="text-sm">{toTitleCase(m.concepto)}</TableCell>
-                      <TableCell className="text-xs text-zinc-500">{m.persona}</TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">{$(m.monto)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {data.salidas.detalle.map((m, i) => {
+                    const ok = m.id !== undefined && controlados.has(m.id)
+                    return (
+                      <TableRow key={m.id ?? i} className={ok ? 'bg-emerald-50/40' : undefined}>
+                        <TableCell>
+                          <button
+                            onClick={() => toggleControlado(m)}
+                            disabled={m.id === undefined}
+                            aria-pressed={ok}
+                            title={ok ? 'Marcado como controlado' : 'Marcar como controlado'}
+                            className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors disabled:opacity-30 ${
+                              ok
+                                ? 'bg-emerald-600 border-emerald-600 text-white'
+                                : 'border-zinc-300 bg-white hover:border-emerald-400 hover:bg-emerald-50'
+                            }`}
+                          >
+                            {ok && <Check size={13} strokeWidth={3} />}
+                          </button>
+                        </TableCell>
+                        <TableCell className="tabular-nums text-sm">{formatDate(m.fecha)}</TableCell>
+                        <TableCell className="text-sm">{m.sucursal}</TableCell>
+                        <TableCell className="text-sm">{toTitleCase(m.concepto)}</TableCell>
+                        <TableCell className="text-xs text-zinc-500">{m.persona}</TableCell>
+                        <TableCell className={`text-right tabular-nums font-medium ${ok ? 'text-zinc-400 line-through' : ''}`}>
+                          {$(m.monto)}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
