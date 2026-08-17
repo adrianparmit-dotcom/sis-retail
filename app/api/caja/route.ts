@@ -67,6 +67,16 @@ interface Movimiento {
   fecha: string; sucursal: string; concepto: string; persona: string; monto: number
 }
 
+/** Un turno reconstruido: día + sucursal + quién cobró.
+ *  Dux no expone los cierres de caja por API (probado: /v2/cajas, /cierrecaja,
+ *  /v2/movimientos-caja y variantes dan 404), así que se arman sumando los
+ *  comprobantes. Es lo VENDIDO en efectivo, no lo que se movió a la caja
+ *  grande — parte queda como fondo de cambio en la sucursal. */
+interface Cierre {
+  fecha: string; sucursal: string; persona: string
+  efectivo: number; otros: number; total: number; tickets: number
+}
+
 export async function GET(req: NextRequest) {
   if (!DUX_TOKEN) return NextResponse.json({ error: 'DUX_API_TOKEN no configurado' }, { status: 503 })
 
@@ -99,23 +109,44 @@ export async function GET(req: NextRequest) {
       duxTodo('/v2/pagos-proveedores', desde, hasta),
     ])
 
-    // ── Entradas: cobros en efectivo ────────────────────────────────
+    // ── Entradas: cobros en efectivo + armado de los turnos ─────────
     const entradas: Movimiento[] = []
+    const porTurno = new Map<string, Cierre>()
     for (const c of cobros) {
       const lineas = (c.cobranza ?? []) as { tipo_valor?: string; monto?: number }[]
       const efectivo = lineas
         .filter(l => (l.tipo_valor ?? '').toUpperCase() === 'EFECTIVO')
         .reduce((s, l) => s + Number(l.monto ?? 0), 0)
+      const suc     = SUCURSALES[Number(c.id_sucursal)] ?? `Sucursal ${c.id_sucursal}`
+      const fecha   = String(c.fecha ?? '')
+      const persona = String((c.personal as { nombre?: string })?.nombre ?? '—')
+      const total   = Number(c.monto ?? 0)
+
+      // El turno cuenta TODOS los cobros, no solo los de efectivo: sirve para
+      // ver qué parte del día se cobró en billetes y qué parte no.
+      const key = `${fecha}|${suc}|${persona}`
+      const t = porTurno.get(key) ?? { fecha, sucursal: suc, persona, efectivo: 0, otros: 0, total: 0, tickets: 0 }
+      t.efectivo += efectivo
+      t.otros    += Math.max(0, total - efectivo)
+      t.total    += total
+      t.tickets  += 1
+      porTurno.set(key, t)
+
       if (efectivo <= 0) continue
-      const suc = SUCURSALES[Number(c.id_sucursal)] ?? `Sucursal ${c.id_sucursal}`
       entradas.push({
-        fecha   : String(c.fecha ?? ''),
-        sucursal: suc,
+        fecha, sucursal: suc,
         concepto: String((c.cliente as { apellido_razon_social?: string })?.apellido_razon_social ?? 'Consumidor final'),
-        persona : String((c.personal as { nombre?: string })?.nombre ?? '—'),
-        monto   : efectivo,
+        persona, monto: efectivo,
       })
     }
+    const cierres = [...porTurno.values()]
+      .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.sucursal.localeCompare(b.sucursal))
+      .map(c => ({
+        ...c,
+        efectivo: Math.round(c.efectivo),
+        otros   : Math.round(c.otros),
+        total   : Math.round(c.total),
+      }))
 
     // ── Salidas: pagos a proveedores marcados como efectivo ─────────
     const salidas: Movimiento[] = []
@@ -163,6 +194,7 @@ export async function GET(req: NextRequest) {
         por_proveedor  : sumar(salidas, m => m.concepto),
         detalle        : salidas.sort((a, b) => b.fecha.localeCompare(a.fecha)),
       },
+      cierres,
       neto: Math.round(totalEntra - totalSale),
       no_contados: {
         nota  : 'Pagos a proveedores marcados como transferencia. No descuentan de la caja.',

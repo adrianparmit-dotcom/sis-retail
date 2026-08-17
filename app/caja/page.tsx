@@ -24,6 +24,10 @@ import { Loader2, Download, Wallet } from 'lucide-react'
 interface Movimiento {
   fecha: string; sucursal: string; concepto: string; persona: string; monto: number
 }
+interface Cierre {
+  fecha: string; sucursal: string; persona: string
+  efectivo: number; otros: number; total: number; tickets: number
+}
 interface Informe {
   periodo : { desde: string; hasta: string }
   entradas: {
@@ -39,6 +43,7 @@ interface Informe {
     por_proveedor: Record<string, number>
     detalle      : Movimiento[]
   }
+  cierres: Cierre[]
   neto: number
   no_contados: { nota: string; total: number; por_proveedor: Record<string, number> }
 }
@@ -93,7 +98,7 @@ export default function CajaPage() {
     toast.success(`${toTitleCase(p.nombre)}: ${nuevo ? 'efectivo' : 'transferencia'}`)
   }
 
-  function exportar() {
+  function exportarPagos() {
     if (!data) return
     const cols: ColumnaExport<Movimiento>[] = [
       { header: 'Fecha',     value: m => formatDate(m.fecha) },
@@ -102,7 +107,21 @@ export default function CajaPage() {
       { header: 'Caja',      value: m => m.persona },
       { header: 'Monto',     value: m => m.monto },
     ]
-    exportTablaXlsx(`caja_${desde}_a_${hasta}`, cols, data.salidas.detalle, 'Pagos en efectivo')
+    exportTablaXlsx(`caja_pagos_${desde}_a_${hasta}`, cols, data.salidas.detalle, 'Pagos en efectivo')
+  }
+
+  function exportarCierres() {
+    if (!data) return
+    const cols: ColumnaExport<Cierre>[] = [
+      { header: 'Fecha',        value: c => formatDate(c.fecha) },
+      { header: 'Sucursal',     value: c => c.sucursal },
+      { header: 'Quién cobró',  value: c => toTitleCase(c.persona) },
+      { header: 'Efectivo',     value: c => c.efectivo },
+      { header: 'Otros medios', value: c => c.otros },
+      { header: 'Total',        value: c => c.total },
+      { header: 'Tickets',      value: c => c.tickets },
+    ]
+    exportTablaXlsx(`caja_cierres_${desde}_a_${hasta}`, cols, data.cierres, 'Cierres por turno')
   }
 
   const filas = (o: Record<string, number>) =>
@@ -167,9 +186,14 @@ export default function CajaPage() {
           {cargando ? <><Loader2 size={14} className="animate-spin mr-1.5" />Consultando Dux...</> : 'Generar informe'}
         </Button>
         {data && (
-          <Button variant="outline" onClick={exportar} className="flex items-center gap-1.5">
-            <Download size={14} />Excel
-          </Button>
+          <>
+            <Button variant="outline" onClick={exportarCierres} className="flex items-center gap-1.5">
+              <Download size={14} />Cierres
+            </Button>
+            <Button variant="outline" onClick={exportarPagos} className="flex items-center gap-1.5">
+              <Download size={14} />Pagos
+            </Button>
+          </>
         )}
         <p className="text-xs text-zinc-400 self-center">Tarda unos segundos: se consulta Dux página por página.</p>
       </div>
@@ -249,6 +273,47 @@ export default function CajaPage() {
               </p>
             </div>
           )}
+
+          {/* Resumen por turno */}
+          <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-zinc-100">
+              <p className="text-sm font-semibold text-zinc-800">
+                Cierres por turno <span className="font-normal text-zinc-400">({data.cierres.length})</span>
+              </p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Sumado comprobante por comprobante. Es lo <strong>vendido</strong> en efectivo — en la caja
+                grande va a haber menos, porque queda fondo de cambio en la sucursal.
+              </p>
+            </div>
+            <div className="overflow-x-auto row-hover">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-zinc-50 hover:bg-zinc-50">
+                    <TableHead>Fecha</TableHead>
+                    <TableHead>Sucursal</TableHead>
+                    <TableHead>Quién cobró</TableHead>
+                    <TableHead className="text-right">Efectivo</TableHead>
+                    <TableHead className="text-right">Otros medios</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Tickets</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.cierres.map((c, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="tabular-nums text-sm">{formatDate(c.fecha)}</TableCell>
+                      <TableCell className="text-sm">{c.sucursal}</TableCell>
+                      <TableCell className="text-sm">{toTitleCase(c.persona)}</TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold text-emerald-800">{$(c.efectivo)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-zinc-500">{$(c.otros)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{$(c.total)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-zinc-500">{c.tickets}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
 
           {/* Detalle de pagos */}
           <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
