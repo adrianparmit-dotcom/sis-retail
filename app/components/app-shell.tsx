@@ -3,7 +3,7 @@
 import { usePathname } from 'next/navigation'
 import {
   ShoppingCart, Package, Truck, BarChart2, ArrowLeftRight,
-  Tag, Scissors, MapPin, AlertTriangle, CheckSquare, MoveRight,
+  Tag, Scissors, MapPin, AlertTriangle, CheckSquare, MoveRight, Wallet,
 } from 'lucide-react'
 import { NavLink, NavSection } from './nav-link'
 import { PreciosBadge } from './precios-badge'
@@ -52,6 +52,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <NavLink href="/promociones" icon={<Tag size={14} />}>Promociones</NavLink>
           <NavLink href="/tareas" icon={<CheckSquare size={14} />}>Tareas</NavLink>
           <NavLink href="/reconciliacion" icon={<BarChart2 size={14} />}>Reconciliación</NavLink>
+          <NavLink href="/caja" icon={<Wallet size={14} />}>Caja</NavLink>
 
           <NavSection label="Góndola" />
           <PreciosBadge />
