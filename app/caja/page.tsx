@@ -29,7 +29,7 @@ interface Cierre {
   efectivo: number; otros: number; total: number; tickets: number
 }
 interface Informe {
-  periodo : { desde: string; hasta: string }
+  periodo : { desde: string; hasta: string; sucursal: string }
   entradas: {
     total: number
     por_sucursal: Record<string, number>
@@ -61,6 +61,8 @@ function inicioDeMes(): string {
 export default function CajaPage() {
   const [desde, setDesde] = useState(inicioDeMes())
   const [hasta, setHasta] = useState(hoyISO())
+  // El control de caja se hace local por local, así que el filtro está acá.
+  const [sucursal, setSucursal] = useState<'' | '1' | '3'>('')
   const [data, setData]   = useState<Informe | null>(null)
   const [cargando, setCargando] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -78,7 +80,7 @@ export default function CajaPage() {
   async function generar() {
     setCargando(true); setError(null)
     try {
-      const res = await fetch(`/api/caja?desde=${desde}&hasta=${hasta}`)
+      const res = await fetch(`/api/caja?desde=${desde}&hasta=${hasta}${sucursal ? `&sucursal=${sucursal}` : ''}`)
       const j = await res.json()
       if (!res.ok) { setError(j.error ?? 'No se pudo generar el informe'); setData(null) }
       else setData(j as Informe)
@@ -98,6 +100,11 @@ export default function CajaPage() {
     toast.success(`${toTitleCase(p.nombre)}: ${nuevo ? 'efectivo' : 'transferencia'}`)
   }
 
+  /** Sufijo de archivo: el informe se saca por local, así que los Excel de
+   *  una sucursal y otra no pueden pisarse en la carpeta de descargas. */
+  const nombreArchivo = (base: string) =>
+    `${base}_${sucursal === '1' ? 'SOHO1' : sucursal === '3' ? 'SOHO2' : 'ambas'}_${desde}_a_${hasta}`
+
   function exportarPagos() {
     if (!data) return
     const cols: ColumnaExport<Movimiento>[] = [
@@ -107,7 +114,7 @@ export default function CajaPage() {
       { header: 'Caja',      value: m => m.persona },
       { header: 'Monto',     value: m => m.monto },
     ]
-    exportTablaXlsx(`caja_pagos_${desde}_a_${hasta}`, cols, data.salidas.detalle, 'Pagos en efectivo')
+    exportTablaXlsx(nombreArchivo('caja_pagos'), cols, data.salidas.detalle, 'Pagos en efectivo')
   }
 
   function exportarCierres() {
@@ -121,7 +128,7 @@ export default function CajaPage() {
       { header: 'Total',        value: c => c.total },
       { header: 'Tickets',      value: c => c.tickets },
     ]
-    exportTablaXlsx(`caja_cierres_${desde}_a_${hasta}`, cols, data.cierres, 'Cierres por turno')
+    exportTablaXlsx(nombreArchivo('caja_cierres'), cols, data.cierres, 'Cierres por turno')
   }
 
   const filas = (o: Record<string, number>) =>
@@ -182,6 +189,24 @@ export default function CajaPage() {
           <label className="text-xs text-zinc-500">Hasta</label>
           <Input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="h-9 w-40" />
         </div>
+        <div>
+          <label className="text-xs text-zinc-500 block">Sucursal</label>
+          <div className="flex gap-1 mt-0.5">
+            {([['', 'Ambas'], ['1', 'SOHO 1'], ['3', 'SOHO 2']] as const).map(([v, label]) => (
+              <button
+                key={v || 'todas'}
+                onClick={() => setSucursal(v)}
+                className={`h-9 px-3 text-sm rounded-lg border transition-colors ${
+                  sucursal === v
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-800 font-medium'
+                    : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <Button onClick={generar} disabled={cargando}>
           {cargando ? <><Loader2 size={14} className="animate-spin mr-1.5" />Consultando Dux...</> : 'Generar informe'}
         </Button>
@@ -204,6 +229,11 @@ export default function CajaPage() {
 
       {data && (
         <>
+          <p className="text-sm text-zinc-600">
+            <strong className="text-zinc-900">{data.periodo.sucursal}</strong>
+            {' · '}{formatDate(data.periodo.desde)} al {formatDate(data.periodo.hasta)}
+          </p>
+
           {/* Resultado */}
           <div className="grid sm:grid-cols-3 gap-3">
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">

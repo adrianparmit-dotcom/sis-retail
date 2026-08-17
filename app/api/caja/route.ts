@@ -47,20 +47,25 @@ async function duxV2(path: string, params: Record<string, string | number>) {
   return res.json()
 }
 
-/** Trae todas las páginas de un endpoint v2. */
-async function duxTodo(path: string, desde: string, hasta: string) {
+/** Trae todas las páginas de un endpoint v2.
+ *
+ *  `sucursal` se manda a Dux para no traer de más, pero además se filtra acá:
+ *  si Dux ignorara el parámetro devolvería las dos sucursales sin avisar y el
+ *  informe saldría mal justo cuando el usuario lo pide separado por local. */
+async function duxTodo(path: string, desde: string, hasta: string, sucursal?: number) {
   const filas: Record<string, unknown>[] = []
   let offset = 0, total = 1
   while (offset < total && offset < 2000) {
     const j = await duxV2(path, {
       id_empresa: ID_EMPRESA, fecha_desde: desde, fecha_hasta: hasta,
+      ...(sucursal ? { id_sucursal: sucursal } : {}),
       limit: PAGE, offset,
     })
     total = Number(j?.paginacion?.total ?? 0)
     filas.push(...((j?.datos ?? []) as Record<string, unknown>[]))
     offset += PAGE
   }
-  return filas
+  return sucursal ? filas.filter(f => Number(f.id_sucursal) === sucursal) : filas
 }
 
 interface Movimiento {
@@ -90,6 +95,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'La fecha desde es posterior a hasta' }, { status: 400 })
   }
 
+  // Sucursal opcional: el usuario suele controlar la caja de cada local por
+  // separado. Vacío o 'todas' = las dos.
+  const sucParam = searchParams.get('sucursal') ?? ''
+  const sucursal = /^\d+$/.test(sucParam) ? Number(sucParam) : undefined
+  if (sucursal !== undefined && !SUCURSALES[sucursal]) {
+    return NextResponse.json({ error: `Sucursal ${sucursal} desconocida` }, { status: 400 })
+  }
+
   try {
     // Qué proveedores se pagan en efectivo (configurable desde /caja).
     const supabase = createClient(
@@ -105,8 +118,8 @@ export async function GET(req: NextRequest) {
     )
 
     const [cobros, pagos] = await Promise.all([
-      duxTodo('/v2/cobros', desde, hasta),
-      duxTodo('/v2/pagos-proveedores', desde, hasta),
+      duxTodo('/v2/cobros', desde, hasta, sucursal),
+      duxTodo('/v2/pagos-proveedores', desde, hasta, sucursal),
     ])
 
     // ── Entradas: cobros en efectivo + armado de los turnos ─────────
@@ -180,7 +193,7 @@ export async function GET(req: NextRequest) {
     for (const e of excluidos) excluidosPorProv[e.proveedor] = (excluidosPorProv[e.proveedor] ?? 0) + e.monto
 
     return NextResponse.json({
-      periodo: { desde, hasta },
+      periodo: { desde, hasta, sucursal: sucursal ? SUCURSALES[sucursal] : 'Todas' },
       entradas: {
         total          : Math.round(totalEntra),
         por_sucursal   : sumar(entradas, m => m.sucursal),
