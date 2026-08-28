@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
+import { reenviarCompraADux } from '@/lib/dux-compra'
 import type { Recepcion } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -63,6 +64,7 @@ export default function RecepcionesPage() {
   const [aDescartar, setADescartar] = useState<RecepcionConItems | null>(null)
   const [borrando, setBorrando] = useState(false)
   const [etapas, setEtapas] = useState<Map<string, EtapaBorrador>>(new Map())
+  const [reintentando, setReintentando] = useState<string | null>(null)
 
   useEffect(() => {
     const cargar = async () => {
@@ -113,6 +115,29 @@ export default function RecepcionesPage() {
     setData(prev => prev.filter(r => r.id !== aDescartar.id))
     toast.success(`Borrador descartado${aDescartar.proveedor_nombre ? ` — ${aDescartar.proveedor_nombre}` : ''}`)
     setADescartar(null)
+  }
+
+  // Reenvía a Dux una recepción que quedó en "Falló Dux" o "No enviada".
+  // El payload se rearma desde la base, así que funciona aunque la recepción se
+  // haya cargado hace días y en otra sesión.
+  async function reintentarDux(r: RecepcionConItems) {
+    setReintentando(r.id)
+    const res = await reenviarCompraADux(r.id)
+    setReintentando(null)
+
+    // Refleja el resultado en la fila sin recargar toda la lista.
+    setData(prev => prev.map(x => x.id === r.id ? {
+      ...x,
+      dux_sync_estado : res.ok ? 'ok' : (x.dux_sync_estado ?? 'error'),
+      dux_sync_at     : new Date().toISOString(),
+      dux_sync_detalle: res.ok ? null : res.motivo,
+    } as RecepcionConItems : x))
+
+    if (res.ok) {
+      toast.success(`Compra registrada en Dux${r.numero_comprobante ? ` — ${r.numero_comprobante}` : ''}`)
+    } else {
+      toast.error(res.motivo + (res.detalle ? `\n${res.detalle}` : ''), { duration: 10000 })
+    }
   }
 
   const borradores   = useMemo(() => data.filter(r => r.estado === 'borrador'),   [data])
@@ -245,9 +270,23 @@ export default function RecepcionesPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Link href={`/recepciones/${r.id}`}>
-                        <Button variant="outline" size="sm" className="text-xs h-7">Ver detalle</Button>
-                      </Link>
+                      <div className="flex items-center justify-end gap-2">
+                        {(r.dux_sync_estado === 'error' || r.dux_sync_estado === 'omitida') && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs h-7"
+                            disabled={reintentando !== null}
+                            onClick={() => reintentarDux(r)}
+                            title="Rearmar la compra desde la recepción y volver a enviarla a Dux"
+                          >
+                            {reintentando === r.id ? 'Enviando...' : 'Reintentar Dux'}
+                          </Button>
+                        )}
+                        <Link href={`/recepciones/${r.id}`}>
+                          <Button variant="outline" size="sm" className="text-xs h-7">Ver detalle</Button>
+                        </Link>
+                      </div>
                     </TableCell>
                   </TableRow>
                 )

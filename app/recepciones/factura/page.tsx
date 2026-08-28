@@ -1446,6 +1446,9 @@ export default function RecepcionFacturaPage() {
         estado          : 'confirmada',
         sucursal_id     : sucursalId,
         fecha_recepcion : hoyISO(),
+        // Se guarda para poder rearmar el payload de Dux al reintentar desde la
+        // lista: antes la letra solo vivía en el estado de esta pantalla.
+        comprobante_letra: letraComprobante,
         total_neto      : totalNeto,
         total_iva       : totalIva,
         total_factura   : totalFinal,
@@ -1628,7 +1631,9 @@ export default function RecepcionFacturaPage() {
           id_deposito     : sucursal.dux_deposito,
           fecha           : fechaISO,
           nro_comprobante : factura.nro_comprobante || 'S/N',
-          tipo_comprobante: letraComprobante,
+          // Dux nombra el comprobante completo: "FACTURA A". Con la letra sola
+          // responde 400 "Comprobante no reconocido".
+          tipo_comprobante: `FACTURA ${letraComprobante}`,
           // For granel: use invoice quantity (what physically arrived), not cantidad_recibida
           productos: duxItems.map(i => ({
             id_item         : i.sku,

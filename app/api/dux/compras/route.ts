@@ -26,6 +26,35 @@ const DUX_BASE    = 'https://erp.duxsoftware.com.ar/WSERP/rest/services'
 const DUX_TOKEN   = process.env.DUX_API_TOKEN ?? ''
 const ID_PERSONAL = parseInt(process.env.DUX_ID_PERSONAL ?? '1')
 
+/**
+ * Dux nombra los comprobantes completos: "FACTURA A", no "A".
+ * Acepta lo que mande el cliente (letra suelta, con guion bajo, minúsculas)
+ * y devuelve la forma que el ERP reconoce. Si no matchea ningún patrón
+ * conocido se deja tal cual: puede ser un tipo válido que acá no listamos
+ * (NOTA DE CREDITO A, COMPROBANTE_COMPRA, …) y no queremos romperlo.
+ */
+function normalizarTipoComprobante(raw: string): string {
+  const t = raw.trim().toUpperCase().replace(/_/g, ' ').replace(/\s+/g, ' ')
+  if (/^[ABCEM]$/.test(t)) return `FACTURA ${t}`
+  const m = /^FACTURA ?([ABCEM])$/.exec(t)
+  if (m) return `FACTURA ${m[1]}`
+  return t
+}
+
+/**
+ * Dux espera PPPP-NNNNNNNN. Repadea las dos mitades cuando el comprobante
+ * tiene esa forma; cualquier otra cosa (comprobantes internos de 13 dígitos
+ * sin guion, por ejemplo) pasa sin tocar.
+ */
+function normalizarNroComprobante(raw: string): string {
+  const m = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(raw)
+  if (!m) return raw.trim()
+  const pv  = m[1].replace(/^0+/, '') || '0'
+  const nro = m[2].replace(/^0+/, '') || '0'
+  if (pv.length > 4 || nro.length > 8) return raw.trim()
+  return `${pv.padStart(4, '0')}-${nro.padStart(8, '0')}`
+}
+
 export async function POST(req: NextRequest) {
   if (!DUX_TOKEN) {
     return NextResponse.json({ error: 'DUX_API_TOKEN not configured' }, { status: 503 })
@@ -59,6 +88,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // tipo_comprobante: Dux espera el nombre completo del comprobante ("FACTURA A"),
+  // no la letra sola. Mandar "A" devuelve 400 "Comprobante no reconocido" —
+  // que es lo que rompió todas las recepciones desde ago-2026.
+  // Se normaliza acá y no solo en el cliente para que los reintentos de payloads
+  // viejos (que guardaron la letra suelta) también salgan bien.
+  payload['tipo_comprobante'] = normalizarTipoComprobante(String(payload['tipo_comprobante']))
+
+  // nro_comprobante: Dux espera PPPP-NNNNNNNN (4 dígitos de punto de venta,
+  // 8 de número). Las facturas llegan con anchos variables — "00007-00015420"
+  // — y el ERP las rechaza. Se re-padea cuando el número entra en el formato.
+  payload['nro_comprobante'] = normalizarNroComprobante(String(payload['nro_comprobante']))
+
   // Sanitize y convertir al schema real de Dux v2:
   //   - Array root key: "productos"
   //   - cod_item (no id_item)
@@ -75,7 +116,7 @@ export async function POST(req: NextRequest) {
   }
   type DuxItem = {
     cod_item: string; ctd: number; precio_unitario: number; porc_descuento: number
-    porc_iva?: number; ctd_recepcionada?: number
+    porc_iva?: number; observaciones?: string
   }
 
   // Alícuotas que acepta Dux. Cualquier otra se omite y el ERP usa la del maestro.
@@ -122,9 +163,14 @@ export async function POST(req: NextRequest) {
     precio_unitario: Math.round(v.total_valor / v.ctd * 100) / 100,
     porc_descuento : 0,
     ...(v.iva !== null ? { porc_iva: v.iva } : {}),
-    // Solo se informa si difiere de lo facturado: mandarla siempre igual no
-    // aporta nada y agranda el payload.
-    ...(v.hayRecibida && v.recibida !== v.ctd ? { ctd_recepcionada: v.recibida } : {}),
+    // El alta de compras de Dux (V2CompraProducto) no tiene campo para la
+    // cantidad realmente recepcionada — ctd_recepcionada solo existe del lado
+    // de lectura. Se mandaba igual y el ERP lo descartaba en silencio, así que
+    // el faltante nunca llegaba a Dux. Va como observación de la línea, que sí
+    // es un campo del alta, para que quede a la vista al reclamarle al proveedor.
+    ...(v.hayRecibida && v.recibida !== v.ctd
+      ? { observaciones: `Recepcionado ${v.recibida} de ${v.ctd} facturados` }
+      : {}),
   }))
 
   if (productosFinal.length === 0) {
