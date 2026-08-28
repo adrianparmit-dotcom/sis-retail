@@ -54,11 +54,12 @@ interface DuxResumen {
   total_cajones: number
   stock_dux: number
   diferencia: number
+  // true = Dux tiene stock del producto en esta sucursal pero no está cargado en
+  // ningún cajón. Antes la vista arrancaba de cajon_productos, así que este caso
+  // —el desfase más grave, mercadería sin ubicar— no existía como fila y la
+  // pantalla no lo podía alertar.
+  sin_ubicar: boolean
 }
-
-// Umbral mínimo para considerar significativa una diferencia positiva (Dux > cajón).
-// Evita ruido cuando hay 1-2 unidades sueltas en góndola.
-const DESFASE_POSITIVO_MIN = 3
 
 export default function UbicacionesPage() {
   const [cajones, setCajones] = useState<Cajon[]>([])
@@ -102,7 +103,7 @@ export default function UbicacionesPage() {
           select: 'id,sku,nombre,codigo_barras',
           order: { column: 'nombre', ascending: true },
         }),
-        supabase.from('v_cajones_dux_resumen').select('sucursal_id,producto_id,total_cajones,stock_dux,diferencia'),
+        supabase.from('v_cajones_dux_resumen').select('sucursal_id,producto_id,total_cajones,stock_dux,diferencia,sin_ubicar'),
       ])
       setCajones((cajonRes.data ?? []) as Cajon[])
       setCajonProductos((cpRes.data ?? []) as unknown as CajonProducto[])
@@ -132,15 +133,20 @@ export default function UbicacionesPage() {
 
   // Clasifica el desfase a nivel (producto, sucursal). 'none' = sin datos Dux.
   // 'ok' = igual. 'cajon_mas' = los cajones tienen más que Dux (probable venta).
-  // 'dux_mas' = Dux tiene más que los cajones por arriba del umbral (stock fuera).
+  // 'dux_mas' = Dux tiene más que los cajones (stock del depósito sin ubicar).
+  //
+  // Sin tolerancia: cualquier diferencia distinta de cero es un desfase. Antes
+  // había un umbral de 3 unidades para el lado positivo, justificado como
+  // "1-2 unidades sueltas en góndola" — pero los cajones solo existen en los
+  // depósitos (La Pieza y Depósito SOHO 2), y en un depósito no hay góndola:
+  // todo lo que Dux dice que está ahí tiene que estar en un cajón.
   type DesfaseKind = 'none' | 'ok' | 'cajon_mas' | 'dux_mas'
   const desfaseKind = useCallback((cp: CajonProducto, sucursalId: string): DesfaseKind => {
     const r = duxByKey.get(`${cp.producto_id}:${sucursalId}`)
     if (!r) return 'none'
     const d = Number(r.diferencia)
-    if (d === 0) return 'ok'
     if (d < 0) return 'cajon_mas'
-    if (d >= DESFASE_POSITIVO_MIN) return 'dux_mas'
+    if (d > 0) return 'dux_mas'
     return 'ok'
   }, [duxByKey])
 
@@ -171,6 +177,28 @@ export default function UbicacionesPage() {
     return set
   }, [cajones, cajonProductosMap, desfaseKind])
 
+  // Productos que Dux tiene en el depósito y que no están en ningún cajón.
+  // No cuelgan de ningún cajón, así que no entran por `cajonesConDesfase`:
+  // se listan aparte, arriba de la grilla.
+  const productoById = useMemo(() => new Map(productos.map(p => [p.id, p])), [productos])
+  const sinUbicarPorSucursal = useMemo(() => {
+    const m = new Map<string, { producto_id: string; sku: string; nombre: string; stock_dux: number }[]>()
+    for (const r of duxResumen) {
+      if (!r.sin_ubicar) continue
+      const p = productoById.get(r.producto_id)
+      const fila = {
+        producto_id: r.producto_id,
+        sku        : p?.sku ?? '—',
+        nombre     : p?.nombre ?? 'Producto desconocido',
+        stock_dux  : Number(r.stock_dux),
+      }
+      const arr = m.get(r.sucursal_id)
+      if (arr) arr.push(fila); else m.set(r.sucursal_id, [fila])
+    }
+    for (const arr of m.values()) arr.sort((a, b) => b.stock_dux - a.stock_dux)
+    return m
+  }, [duxResumen, productoById])
+
   const tabStats = useMemo(() => {
     const compute = (sid: string) => {
       const cs = cajones.filter(c => c.sucursal_id === sid)
@@ -180,10 +208,11 @@ export default function UbicacionesPage() {
         ocupados: cs.filter(c => (cajonProductosMap.get(c.id)?.length ?? 0) > 0).length,
         sinContar: all.filter(cp => cp.cantidad === 0).length,
         desfases: cs.filter(c => cajonesConDesfase.has(c.id)).length,
+        sinUbicar: sinUbicarPorSucursal.get(sid)?.length ?? 0,
       }
     }
     return { pieza: compute(PIEZA_ID), deposito: compute(DEPOSITO_ID) }
-  }, [cajones, cajonProductosMap, cajonesConDesfase])
+  }, [cajones, cajonProductosMap, cajonesConDesfase, sinUbicarPorSucursal])
 
   // ── Search / highlight ────────────────────────────────────────────────
   // Devuelve null = no hay filtros activos (mostrar todo sin dimming).
@@ -435,6 +464,14 @@ export default function UbicacionesPage() {
                     {s.desfases} desfase{s.desfases === 1 ? '' : 's'}
                   </span>
                 )}
+                {s.sinUbicar > 0 && (
+                  <span
+                    className="text-xs bg-amber-100 text-amber-700 rounded px-1.5 py-0.5 font-medium"
+                    title="Productos con stock en Dux que no están cargados en ningún cajón"
+                  >
+                    {s.sinUbicar} sin ubicar
+                  </span>
+                )}
               </>
             )}
           </button>
@@ -473,6 +510,32 @@ export default function UbicacionesPage() {
           {soloDesfases ? '✓ Solo desfases' : 'Solo desfases'}
         </button>
       </div>
+
+      {/* Sin ubicar: stock que Dux tiene en este depósito y no está en ningún cajón */}
+      {!loading && (sinUbicarPorSucursal.get(activeSucursal)?.length ?? 0) > 0 && (
+        <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
+          <div className="flex items-baseline gap-2 mb-2">
+            <h3 className="text-sm font-semibold text-amber-800">
+              Sin ubicar · {sinUbicarPorSucursal.get(activeSucursal)!.length} producto
+              {sinUbicarPorSucursal.get(activeSucursal)!.length === 1 ? '' : 's'}
+            </h3>
+            <span className="text-xs text-amber-700">
+              Dux tiene stock acá pero no están cargados en ningún cajón
+            </span>
+          </div>
+          <ul className="divide-y divide-amber-200/70 text-sm">
+            {sinUbicarPorSucursal.get(activeSucursal)!.map(p => (
+              <li key={p.producto_id} className="flex items-center gap-3 py-1.5">
+                <span className="font-mono text-xs text-amber-700 w-14 shrink-0">{p.sku}</span>
+                <span className="text-zinc-700 truncate">{p.nombre}</span>
+                <span className="ml-auto text-xs font-medium text-amber-800 shrink-0">
+                  {p.stock_dux} en Dux
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Grid */}
       {loading ? (
