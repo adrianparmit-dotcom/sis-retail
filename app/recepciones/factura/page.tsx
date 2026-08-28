@@ -25,6 +25,7 @@ import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorTo
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
 import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
+import { tipoComprobanteDux, type LetraComprobante } from '@/lib/dux-compra'
 import { hoyISO } from '@/lib/format'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { normalizeText } from '@/lib/search'
@@ -604,7 +605,7 @@ export default function RecepcionFacturaPage() {
   const [step, setStep]                       = useState<Step>('paste')
   const [texto, setTexto]                     = useState('')
   const [tipoProveedor, setTipoProveedor]     = useState<ProveedorType | 'auto'>('auto')
-  const [letraComprobante, setLetraComprobante] = useState<'A' | 'B' | 'C'>('A')
+  const [letraComprobante, setLetraComprobante] = useState<LetraComprobante>('A')
   const [sucursalId, setSucursalId]           = useState(SUCURSALES[0].id)
   const [factura, setFactura]                 = useState<ParsedFactura | null>(null)
   const [items, setItems]                     = useState<InvoiceLineItem[]>([])
@@ -1633,7 +1634,7 @@ export default function RecepcionFacturaPage() {
           nro_comprobante : factura.nro_comprobante || 'S/N',
           // Dux nombra el comprobante completo: "FACTURA A". Con la letra sola
           // responde 400 "Comprobante no reconocido".
-          tipo_comprobante: `FACTURA ${letraComprobante}`,
+          tipo_comprobante: tipoComprobanteDux(letraComprobante),
           // For granel: use invoice quantity (what physically arrived), not cantidad_recibida
           productos: duxItems.map(i => ({
             id_item         : i.sku,
@@ -1810,13 +1811,14 @@ export default function RecepcionFacturaPage() {
             </Select>
           </div>
           <div>
-            <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-1 block">Letra factura</label>
-            <Select value={letraComprobante} onValueChange={v => setLetraComprobante(v as 'A' | 'B' | 'C')}>
+            <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-1 block">Tipo de comprobante</label>
+            <Select value={letraComprobante} onValueChange={v => setLetraComprobante(v as LetraComprobante)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="A">Factura A (RI → RI)</SelectItem>
                 <SelectItem value="B">Factura B (RI → CF)</SelectItem>
                 <SelectItem value="C">Factura C (Monotributo)</SelectItem>
+                <SelectItem value="X">Documento X (no fiscal)</SelectItem>
               </SelectContent>
             </Select>
           </div>

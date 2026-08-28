@@ -28,31 +28,33 @@ const ID_PERSONAL = parseInt(process.env.DUX_ID_PERSONAL ?? '1')
 
 /**
  * Dux nombra los comprobantes completos: "FACTURA A", no "A".
- * Acepta lo que mande el cliente (letra suelta, con guion bajo, minúsculas)
- * y devuelve la forma que el ERP reconoce. Si no matchea ningún patrón
- * conocido se deja tal cual: puede ser un tipo válido que acá no listamos
- * (NOTA DE CREDITO A, COMPROBANTE_COMPRA, …) y no queremos romperlo.
+ *
+ * Solo se reescribe el caso "letra suelta" (y sus variantes de tipeo). Todo lo
+ * demás pasa tal cual, salvo trim y mayúsculas: puede ser un tipo válido que
+ * acá no listamos —COMPROBANTE_COMPRA para los documentos X, NOTA DE CREDITO
+ * A…— y tocarlo lo romperia. En particular NO se tocan los guiones bajos:
+ * Dux usa COMPROBANTE_COMPRA con guion bajo, y convertirlo a espacio lo
+ * invalidaba.
  */
 function normalizarTipoComprobante(raw: string): string {
-  const t = raw.trim().toUpperCase().replace(/_/g, ' ').replace(/\s+/g, ' ')
+  const t = raw.trim().toUpperCase().replace(/\s+/g, ' ')
   if (/^[ABCEM]$/.test(t)) return `FACTURA ${t}`
-  const m = /^FACTURA ?([ABCEM])$/.exec(t)
+  const m = /^FACTURA[ _]?([ABCEM])$/.exec(t)
   if (m) return `FACTURA ${m[1]}`
   return t
 }
 
 /**
- * Dux espera PPPP-NNNNNNNN. Repadea las dos mitades cuando el comprobante
- * tiene esa forma; cualquier otra cosa (comprobantes internos de 13 dígitos
- * sin guion, por ejemplo) pasa sin tocar.
+ * El número se manda tal cual viene de la factura; solo se limpian espacios.
+ *
+ * Se probó repadear a PPPP-NNNNNNNN siguiendo el ejemplo de la documentación
+ * ("0001-00001234"), pero las compras reales del ERP muestran el punto de venta
+ * con CINCO dígitos —"A-00007-00015420", "A-00001-00005119"—, así que recortar
+ * a cuatro rompía justo los comprobantes que ya estaban bien. Dux acepta los
+ * dos anchos y arma él la cadena final con la letra adelante.
  */
 function normalizarNroComprobante(raw: string): string {
-  const m = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(raw)
-  if (!m) return raw.trim()
-  const pv  = m[1].replace(/^0+/, '') || '0'
-  const nro = m[2].replace(/^0+/, '') || '0'
-  if (pv.length > 4 || nro.length > 8) return raw.trim()
-  return `${pv.padStart(4, '0')}-${nro.padStart(8, '0')}`
+  return raw.trim().replace(/\s+/g, '')
 }
 
 export async function POST(req: NextRequest) {

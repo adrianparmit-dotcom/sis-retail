@@ -15,7 +15,21 @@
 import { supabase } from '@/lib/supabase'
 import { SUCURSALES_DUX } from '@/lib/constants'
 
-export type LetraComprobante = 'A' | 'B' | 'C'
+export type LetraComprobante = 'A' | 'B' | 'C' | 'X'
+
+/**
+ * Cómo nombra Dux cada comprobante al registrar la compra.
+ *
+ * Las facturas van con el nombre completo ("FACTURA A"): mandar la letra sola
+ * devuelve 400 "Comprobante no reconocido".
+ *
+ * Los documentos X —remitos y comprobantes internos que no se envían a AFIP—
+ * no son facturas: en Dux figuran como COMPROBANTE_COMPRA, que es el tipo con
+ * el que ya se cargan a mano hoy (74 de las últimas 80 compras del ERP).
+ */
+export function tipoComprobanteDux(letra: LetraComprobante): string {
+  return letra === 'X' ? 'COMPROBANTE_COMPRA' : `FACTURA ${letra}`
+}
 
 export type ReenvioResultado =
   | { ok: true }
@@ -153,7 +167,7 @@ export async function reenviarCompraADux(
     id_deposito     : sucursal.dux_deposito,
     fecha           : rec.fecha_factura,
     nro_comprobante : rec.numero_comprobante || 'S/N',
-    tipo_comprobante: `FACTURA ${letraFinal}`,
+    tipo_comprobante: tipoComprobanteDux(letraFinal),
     productos: lineas.map(i => ({
       id_item          : i.sku!,
       cantidad         : Number(i.cantidad_esperada),
