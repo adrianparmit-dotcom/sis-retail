@@ -8,6 +8,7 @@ import {
   Tag, Printer, Truck, BarChart2, CheckSquare, Clock, RefreshCw,
 } from 'lucide-react'
 import { formatDateTime } from '@/lib/format'
+import { SUCURSALES } from '@/lib/constants'
 
 interface DashboardStats {
   urgentes: number
@@ -15,6 +16,10 @@ interface DashboardStats {
   vencCriticos: number
   preciosSinVer: number
   reposicionPendiente: number
+  // Productos con stock en un depósito que no están cargados en ningún cajón.
+  // Vivía solo dentro de /ubicaciones: si nadie entraba, nadie se enteraba.
+  sinUbicar: number
+  sinUbicarDetalle: string
   lastSync: string | null
 }
 
@@ -40,12 +45,22 @@ const COLOR_MAP: Record<string, { hover: string; icon: string }> = {
   slate:   { hover: 'hover:border-slate-200 hover:bg-slate-50/40',     icon: 'bg-slate-100 text-slate-600'     },
 }
 
+// Los dos depósitos donde hay cajones. El resumen de ubicaciones solo produce
+// filas para estas sucursales.
+const DEPOSITOS = [
+  { id: SUCURSALES.SOHO1_PIEZA,    nombre: 'La Pieza' },
+  { id: SUCURSALES.SOHO2_DEPOSITO, nombre: 'Depósito' },
+] as const
+
+// `colorBg` se aplica solo cuando el contador está en alerta: con el fondo
+// blanco de siempre las tarjetas encendidas se perdían entre las apagadas.
 const ALERT_CONFIG = [
-  { key: 'urgentes',            label: 'Urgentes',       href: '/compras',      colorBorder: 'border-red-200',    colorText: 'text-red-600'    },
-  { key: 'sinStock',            label: 'Sin stock',      href: '/compras',      colorBorder: 'border-red-200',    colorText: 'text-red-600'    },
-  { key: 'vencCriticos',        label: 'Venc. críticos', href: '/vencimientos', colorBorder: 'border-amber-200',  colorText: 'text-amber-600'  },
-  { key: 'reposicionPendiente', label: 'Reponer',        href: '/reposicion',   colorBorder: 'border-sky-200',    colorText: 'text-sky-600'    },
-  { key: 'preciosSinVer',       label: 'Precios nuevos', href: '/precios',      colorBorder: 'border-orange-200', colorText: 'text-orange-600' },
+  { key: 'urgentes',            label: 'Urgentes',       href: '/compras',      colorBorder: 'border-red-300',    colorText: 'text-red-600',    colorBg: 'bg-red-50'    },
+  { key: 'sinStock',            label: 'Sin stock',      href: '/compras',      colorBorder: 'border-red-300',    colorText: 'text-red-600',    colorBg: 'bg-red-50'    },
+  { key: 'vencCriticos',        label: 'Venc. críticos', href: '/vencimientos', colorBorder: 'border-amber-300',  colorText: 'text-amber-600',  colorBg: 'bg-amber-50'  },
+  { key: 'reposicionPendiente', label: 'Reponer',        href: '/reposicion',   colorBorder: 'border-sky-300',    colorText: 'text-sky-600',    colorBg: 'bg-sky-50'    },
+  { key: 'preciosSinVer',       label: 'Precios nuevos', href: '/precios',      colorBorder: 'border-orange-300', colorText: 'text-orange-600', colorBg: 'bg-orange-50' },
+  { key: 'sinUbicar',           label: 'Sin ubicar',     href: '/ubicaciones',  colorBorder: 'border-amber-400',  colorText: 'text-amber-700',  colorBg: 'bg-amber-50'  },
 ] as const
 
 export default function HomePage() {
@@ -58,7 +73,7 @@ export default function HomePage() {
         // Vista v4 con los mismos filtros que los KPIs de /compras,
         // para que los números de la home coincidan con el dashboard.
         const [
-          syncRes, urgentesRes, sinStockRes, vencRes, preciosRes, reposRes,
+          syncRes, urgentesRes, sinStockRes, vencRes, preciosRes, reposRes, sinUbicarRes,
         ] = await Promise.all([
           supabase.from('productos').select('dux_sync_at').order('dux_sync_at', { ascending: false }).limit(1).maybeSingle(),
           supabase.from('v_compras_inteligentes_v4').select('id', { count: 'exact', head: true }).lt('dias_cobertura', 30).gt('ventas_30d', 0),
@@ -66,13 +81,25 @@ export default function HomePage() {
           supabase.from('v_vencimientos_fefo').select('lote_id', { count: 'exact', head: true }).in('estado', ['vencido', 'critico']).gt('cantidad', 0),
           supabase.from('price_changes').select('id', { count: 'exact', head: true }).eq('visto', false),
           supabase.from('v_reposicion_dashboard').select('producto_id', { count: 'exact', head: true }).lte('soho1_local', 2),
+          // Se traen las filas en vez de pedir un count: son pocas (una por
+          // producto sin ubicar) y hace falta el desglose por depósito.
+          supabase.from('v_cajones_dux_resumen').select('sucursal_id').eq('sin_ubicar', true),
         ])
+
+        const sinUbicarFilas = (sinUbicarRes.data ?? []) as { sucursal_id: string }[]
+        const porDeposito = DEPOSITOS.map(d => ({
+          nombre: d.nombre,
+          n     : sinUbicarFilas.filter(f => f.sucursal_id === d.id).length,
+        }))
+
         setStats({
           urgentes:            urgentesRes.count ?? 0,
           sinStock:            sinStockRes.count ?? 0,
           vencCriticos:        vencRes.count ?? 0,
           preciosSinVer:       preciosRes.count ?? 0,
           reposicionPendiente: reposRes.count ?? 0,
+          sinUbicar:           sinUbicarFilas.length,
+          sinUbicarDetalle:    porDeposito.map(d => `${d.nombre}: ${d.n}`).join(' · '),
           lastSync:            (syncRes.data as { dux_sync_at: string } | null)?.dux_sync_at ?? null,
         })
       } catch (err) {
@@ -106,16 +133,20 @@ export default function HomePage() {
       <div className="px-8 py-6 space-y-6 max-w-4xl">
 
         {/* Alert strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-          {ALERT_CONFIG.map(({ key, label, href, colorBorder, colorText }) => {
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+          {ALERT_CONFIG.map(({ key, label, href, colorBorder, colorText, colorBg }) => {
             const value = stats?.[key] ?? 0
             const hasAlert = !loading && value > 0
+            // Solo "Sin ubicar" trae desglose: es el único contador que se
+            // reparte entre depósitos y saber en cuál está cambia a dónde ir.
+            const detalle = key === 'sinUbicar' ? stats?.sinUbicarDetalle : undefined
             return (
               <Link
                 key={key}
                 href={href}
-                className={`bg-white rounded-xl border px-4 py-3 transition-all hover:-translate-y-0.5 hover:shadow-sm ${
-                  hasAlert ? colorBorder : 'border-gray-200'
+                title={hasAlert && detalle ? detalle : undefined}
+                className={`rounded-xl border px-4 py-3 transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                  hasAlert ? `${colorBorder} ${colorBg}` : 'border-gray-200 bg-white'
                 }`}
               >
                 {loading ? (
@@ -128,7 +159,12 @@ export default function HomePage() {
                     <p className={`text-2xl font-bold leading-none ${hasAlert ? colorText : 'text-gray-300'}`}>
                       {value}
                     </p>
-                    <p className="text-[11px] text-gray-500 mt-1.5 leading-tight">{label}</p>
+                    <p className={`text-[11px] mt-1.5 leading-tight ${hasAlert ? `${colorText} font-semibold` : 'text-gray-500'}`}>
+                      {label}
+                    </p>
+                    {hasAlert && detalle && (
+                      <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">{detalle}</p>
+                    )}
                   </>
                 )}
               </Link>
