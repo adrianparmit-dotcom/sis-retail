@@ -21,7 +21,6 @@ import { supabase } from '@/lib/supabase'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { formatDate, hoyISO, toTitleCase, formatNum } from '@/lib/format'
 import { matchesQuery } from '@/lib/search'
 import { SUCURSALES_OPERATIVAS } from '@/lib/constants'
@@ -77,10 +76,30 @@ export function TrabajoPendiente() {
   // Formulario de la tanda que se está cargando
   const [fProducto, setFProducto] = useState('')
   const [fBusqueda, setFBusqueda] = useState('')
-  const [fCantidad, setFCantidad] = useState('')
   const [fVence, setFVence]       = useState('')
   const [fLote, setFLote]         = useState('')
-  const [fSucursal, setFSucursal] = useState<string>(SUCURSALES_OPERATIVAS[0]?.id ?? '')
+  // Un renglón de paquetes por sucursal en vez de un campo único + selector:
+  // una tanda de embolsado casi siempre se reparte entre varios locales, y con
+  // un solo campo había que registrarla varias veces eligiendo la sucursal cada
+  // vez. Se carga todo junto y el total sirve de control contra el bulto.
+  const cantidadesVacias = useCallback(
+    () => Object.fromEntries(SUCURSALES_OPERATIVAS.map(s => [s.id, ''])) as Record<string, string>,
+    [],
+  )
+  const [fCantPorSuc, setFCantPorSuc] = useState<Record<string, string>>(cantidadesVacias)
+
+  // Paquetes cargados por sucursal, ya normalizados: solo los que tienen un
+  // número positivo cuentan.
+  const repartoValido = useMemo(
+    () => SUCURSALES_OPERATIVAS
+      .map(s => ({ sucursalId: s.id, nombre: s.nombre, cant: Number(fCantPorSuc[s.id]) }))
+      .filter(r => Number.isFinite(r.cant) && r.cant > 0),
+    [fCantPorSuc],
+  )
+  const totalPaquetes = useMemo(
+    () => repartoValido.reduce((s, r) => s + r.cant, 0),
+    [repartoValido],
+  )
 
   const cargar = useCallback(async () => {
     // Bultos = renglones de recepciones confirmadas marcados como granel.
@@ -151,7 +170,7 @@ export function TrabajoPendiente() {
   function abrir(b: Bulto) {
     const cerrando = abierto === b.itemId
     setAbierto(cerrando ? null : b.itemId)
-    setFProducto(''); setFBusqueda(''); setFCantidad(''); setFLote('')
+    setFProducto(''); setFBusqueda(''); setFLote(''); setFCantPorSuc(cantidadesVacias())
     // La fecha del bulto se hereda: los paquetes vencen cuando vence la
     // mercadería, no cuando se embolsaron. Igual queda editable.
     setFVence(cerrando ? '' : (b.venceMadre ?? ''))
@@ -191,49 +210,58 @@ export function TrabajoPendiente() {
   }
 
   async function registrarTanda(b: Bulto) {
-    const cant = Number(fCantidad)
-    if (!fProducto)                       { toast.error('Elegí en qué variedad se fraccionó'); return }
-    if (!Number.isFinite(cant) || cant <= 0) { toast.error('Poné cuántos paquetes salieron'); return }
-    if (!fVence)                          { toast.error('Falta la fecha de vencimiento'); return }
+    if (!fProducto)             { toast.error('Elegí en qué variedad se fraccionó'); return }
+    if (repartoValido.length === 0) {
+      toast.error('Poné cuántos paquetes van a cada sucursal (al menos una)')
+      return
+    }
+    if (!fVence)                { toast.error('Falta la fecha de vencimiento'); return }
 
     setGuardando(true)
     try {
-      const { error: e1 } = await supabase.from('recepcion_item_fraccionamiento').insert({
-        recepcion_item_id   : b.itemId,
-        producto_final_id   : fProducto,
-        cantidad_fraccionada: cant,
-        fecha_vencimiento   : fVence,
-        numero_lote         : fLote.trim() || null,
-        sucursal_id         : fSucursal || null,
-        estado              : 'completo',
-      })
+      // Una tanda por sucursal: cada renglón queda trazable por separado, igual
+      // que cuando se cargaban de a una.
+      const { error: e1 } = await supabase.from('recepcion_item_fraccionamiento').insert(
+        repartoValido.map(r => ({
+          recepcion_item_id   : b.itemId,
+          producto_final_id   : fProducto,
+          cantidad_fraccionada: r.cant,
+          fecha_vencimiento   : fVence,
+          numero_lote         : fLote.trim() || null,
+          sucursal_id         : r.sucursalId,
+          estado              : 'completo',
+        })),
+      )
       if (e1) throw new Error(e1.message)
 
       // Los paquetes embolsados sí son stock con vencimiento: se suman a la
       // fecha correspondiente, igual que en una recepción normal.
-      const { data: existente } = await supabase.from('vencimientos')
-        .select('id, cantidad')
-        .eq('producto_id', fProducto)
-        .eq('sucursal_id', fSucursal)
-        .eq('fecha_vencimiento', fVence)
-        .maybeSingle()
-      if (existente) {
-        const prev = existente as { id: string; cantidad: number }
-        await supabase.from('vencimientos')
-          .update({ cantidad: Number(prev.cantidad) + cant, updated_at: new Date().toISOString() })
-          .eq('id', prev.id)
-      } else {
-        await supabase.from('vencimientos').insert({
-          producto_id      : fProducto,
-          sucursal_id      : fSucursal,
-          fecha_vencimiento: fVence,
-          cantidad         : cant,
-          origen           : 'fraccionamiento',
-        })
+      for (const r of repartoValido) {
+        const { data: existente } = await supabase.from('vencimientos')
+          .select('id, cantidad')
+          .eq('producto_id', fProducto)
+          .eq('sucursal_id', r.sucursalId)
+          .eq('fecha_vencimiento', fVence)
+          .maybeSingle()
+        if (existente) {
+          const prev = existente as { id: string; cantidad: number }
+          await supabase.from('vencimientos')
+            .update({ cantidad: Number(prev.cantidad) + r.cant, updated_at: new Date().toISOString() })
+            .eq('id', prev.id)
+        } else {
+          await supabase.from('vencimientos').insert({
+            producto_id      : fProducto,
+            sucursal_id      : r.sucursalId,
+            fecha_vencimiento: fVence,
+            cantidad         : r.cant,
+            origen           : 'fraccionamiento',
+          })
+        }
       }
 
-      toast.success(`${cant} paquetes registrados`)
-      setFProducto(''); setFBusqueda(''); setFCantidad(''); setFLote('')
+      const detalle = repartoValido.map(r => `${r.cant} a ${r.nombre}`).join(' · ')
+      toast.success(`${totalPaquetes} paquetes registrados — ${detalle}`)
+      setFProducto(''); setFBusqueda(''); setFLote(''); setFCantPorSuc(cantidadesVacias())
       cargar()
     } catch (err) {
       toast.error('No se pudo guardar: ' + (err as Error).message)
@@ -427,12 +455,25 @@ export function TrabajoPendiente() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div>
-                      <label className="text-[11px] text-zinc-500">Paquetes</label>
-                      <Input type="number" min={1} value={fCantidad}
-                        onChange={e => setFCantidad(e.target.value)} className="h-8" placeholder="Ej: 20" />
+                  <div>
+                    <label className="text-[11px] text-zinc-500">Paquetes por sucursal</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-0.5">
+                      {SUCURSALES_OPERATIVAS.map(s => (
+                        <div key={s.id}>
+                          <Input
+                            type="number" min={0} inputMode="numeric"
+                            value={fCantPorSuc[s.id] ?? ''}
+                            onChange={e => setFCantPorSuc(prev => ({ ...prev, [s.id]: e.target.value }))}
+                            className="h-8" placeholder="0"
+                            aria-label={`Paquetes para ${s.nombre}`}
+                          />
+                          <p className="text-[10px] text-zinc-500 mt-0.5 leading-tight">{s.nombre}</p>
+                        </div>
+                      ))}
                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[11px] text-zinc-500">Vence</label>
                       <Input type="date" value={fVence} min={hoyISO()}
@@ -443,26 +484,32 @@ export function TrabajoPendiente() {
                       <Input value={fLote} onChange={e => setFLote(e.target.value)}
                         className="h-8" placeholder="—" />
                     </div>
-                    <div>
-                      <label className="text-[11px] text-zinc-500">Sucursal</label>
-                      <Select value={fSucursal} onValueChange={v => setFSucursal(v ?? '')}>
-                        <SelectTrigger className="h-8">
-                          <SelectValue>
-                            {SUCURSALES_OPERATIVAS.find(s => s.id === fSucursal)?.nombre ?? 'Elegir'}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SUCURSALES_OPERATIVAS.map(s => (
-                            <SelectItem key={s.id} value={s.id}>{s.nombre}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
                   </div>
 
-                  {fProducto && Number(fCantidad) > 0 && gramosPorUnidad(prodMap.get(fProducto)) > 0 && (
-                    <p className="text-[11px] text-zinc-500">
-                      Son {formatNum(Number(fCantidad) * gramosPorUnidad(prodMap.get(fProducto)) / 1000, 2)} kg del bulto.
+                  {/* Sumatoria de control: lo cargado en las 4 sucursales contra el bulto. */}
+                  {totalPaquetes > 0 && (
+                    <div className="flex items-baseline justify-between gap-3 rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1.5">
+                      <span className="text-[11px] text-zinc-500">Total a registrar</span>
+                      <span className="text-xs font-semibold text-zinc-800 tabular-nums">
+                        {formatNum(totalPaquetes, 0)} paq.
+                        {gramosPorUnidad(prodMap.get(fProducto)) > 0 && (
+                          <>
+                            {' · '}
+                            {formatNum(totalPaquetes * gramosPorUnidad(prodMap.get(fProducto)) / 1000, 2)} kg
+                            <span className="font-normal text-zinc-500"> de {formatNum(restanKg, 2)} kg que restan</span>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Aviso, no bloqueo: puede haber más paquetes que kilos por un
+                      error de carga, pero también porque el bulto vino con más
+                      peso del facturado. Lo decide quien está embolsando. */}
+                  {fProducto && gramosPorUnidad(prodMap.get(fProducto)) > 0 &&
+                   totalPaquetes * gramosPorUnidad(prodMap.get(fProducto)) / 1000 > restanKg + 0.001 && (
+                    <p className="text-[11px] text-amber-700">
+                      Estás cargando más kilos de los que quedan en el bulto. Revisá las cantidades.
                     </p>
                   )}
 
