@@ -258,16 +258,33 @@ export default function UbicacionesPage() {
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(c)
     }
+    // Con un filtro activo las coincidencias van primero, dentro de cada sector
+    // y también entre sectores. Antes conservaban su posición por número: con
+    // 50 cajones apagados había que barrer la grilla a ojo para encontrarlas, y
+    // si la única coincidencia caía en "Cajas" quedaba abajo de todo, fuera de
+    // la pantalla, mientras "Cajones" mostraba "0 coinciden".
     for (const arr of map.values()) {
-      arr.sort((a, b) => (a.numero ?? 0) - (b.numero ?? 0))
+      arr.sort((a, b) => {
+        if (matchingIds) {
+          const ma = matchingIds.has(a.id) ? 0 : 1
+          const mb = matchingIds.has(b.id) ? 0 : 1
+          if (ma !== mb) return ma - mb
+        }
+        return (a.numero ?? 0) - (b.numero ?? 0)
+      })
     }
-    return Array.from(map.entries()).sort(([a], [b]) => {
+    return Array.from(map.entries()).sort(([a, itemsA], [b, itemsB]) => {
+      if (matchingIds) {
+        const ha = itemsA.some(c => matchingIds.has(c.id)) ? 0 : 1
+        const hb = itemsB.some(c => matchingIds.has(c.id)) ? 0 : 1
+        if (ha !== hb) return ha - hb
+      }
       const ai = SECTOR_ORDER.indexOf(a), bi = SECTOR_ORDER.indexOf(b)
       if (ai === -1 && bi === -1) return a.localeCompare(b)
       if (ai === -1) return 1; if (bi === -1) return -1
       return ai - bi
     })
-  }, [tabCajones])
+  }, [tabCajones, matchingIds])
 
   // ── Product search for add ────────────────────────────────────────────
   const filteredProd = useMemo(() =>
@@ -493,7 +510,13 @@ export default function UbicacionesPage() {
           )}
           {scanMiss && <p className="absolute -bottom-5 left-0 text-xs text-red-500 whitespace-nowrap">Código no encontrado</p>}
           {(search || soloDesfases) && matchingIds && (
-            <p className="absolute -bottom-5 right-0 text-xs text-zinc-400">{matchingIds.size} coincidencias</p>
+            <p className={`absolute -bottom-5 right-0 text-xs whitespace-nowrap ${
+              matchingIds.size === 0 ? 'text-red-500' : 'text-zinc-400'
+            }`}>
+              {matchingIds.size === 0
+                ? 'sin coincidencias'
+                : `${matchingIds.size} coincidencia${matchingIds.size === 1 ? '' : 's'}`}
+            </p>
           )}
         </div>
 
@@ -549,8 +572,13 @@ export default function UbicacionesPage() {
                 <div className="flex items-center gap-3 mb-3">
                   <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">{sector}</h3>
                   <span className="text-xs text-zinc-300">{items.length}</span>
+                  {/* "0 coinciden" en ámbar hacía creer que la búsqueda no
+                      encontró nada, cuando la coincidencia estaba en el otro
+                      sector. Sin resultados, el rótulo se apaga. */}
                   {matchingIds && matchCount < items.length && (
-                    <span className="text-xs text-amber-600 font-medium">{matchCount} coinciden</span>
+                    matchCount === 0
+                      ? <span className="text-xs text-zinc-300">sin coincidencias acá</span>
+                      : <span className="text-xs text-amber-600 font-medium">{matchCount} coinciden</span>
                   )}
                   {(sector === 'Cajones' || sector === 'Cajas') && (
                     <button
