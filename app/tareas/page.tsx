@@ -37,53 +37,84 @@ interface TareaDef {
   texto: string
   detalle?: string
   href: string
-  dias?: number[]   // only show on these days (0=Lun…6=Dom). undefined = every day
+  /** Solo se muestra estos días (0=Lun…6=Dom). undefined = todos los días. */
+  dias?: number[]
+  /** Tarea de cada 15 días: aparece al arrancar cada quincena. */
+  quincenal?: boolean
+}
+
+/** Ventana de la tarea quincenal. Se abre 3 días al arrancar cada quincena
+ *  (1–3 y 16–18) en vez de un día puntual, porque si cae domingo el local
+ *  está cerrado y la tarea se perdería. */
+function enVentanaQuincenal(): boolean {
+  const d = new Date().getDate()
+  return (d >= 1 && d <= 3) || (d >= 16 && d <= 18)
 }
 
 const STAFF: TareaDef[] = [
   {
-    id: 'reconciliacion',
-    texto: 'Revisar reconciliación y cargar vencimientos pendientes',
-    detalle: 'Entrá a Reconciliación y fijate qué productos tienen diferencia entre stock Dux y vencimientos cargados.',
-    href: '/reconciliacion',
+    id: 'pagos-caja-grande',
+    texto: 'Pasar al sistema los pagos hechos de caja grande',
+    detalle: 'Todo lo que salió de caja grande — pagos a proveedores y gastos varios — cargarlo en Dux el mismo día. Si no se carga, no aparece en el informe de caja y el arqueo no cierra.',
+    href: '/caja',
   },
   {
-    id: 'reposicion',
-    texto: 'Revisar reposición y trasladar lo que corresponda',
-    detalle: 'Mirá el panel de reposición: si hay productos bajos en la góndola y stock en la pieza o depósito, trasladar.',
-    href: '/reposicion',
+    id: 'fraccionar',
+    texto: 'Fraccionar y cargar las cantidades en Ubicaciones',
+    detalle: 'Anotar lo que se fraccionó en cada local o en La Pieza, según corresponda, y después ingresar esas cantidades en Ubicaciones.',
+    href: '/fraccionamiento',
   },
   {
-    id: 'vencimientos',
-    texto: 'Revisar vencimientos críticos y aplicar promos si hace falta',
-    detalle: 'Si hay productos a punto de vencer (rojo o naranja), activar promo desde el módulo de promociones.',
-    href: '/vencimientos',
+    id: 'precios-proveedor',
+    texto: 'Actualizar precios de proveedor cuando avisan aumentos',
+    detalle: 'Los costos se cargan en Dux. El sistema los toma solo en la próxima sincronización, así que hasta que no se carguen las sugerencias de compra siguen calculando con el precio viejo.',
+    href: '/compras',
   },
   {
-    id: 'precios',
-    texto: 'Verificar precios en góndola vs sistema',
-    detalle: 'Chequear si hay etiquetas desactualizadas en góndola respecto al precio de Dux.',
+    id: 'precios-gondola',
+    texto: 'Actualizar precios en góndola cuando aparecen pendientes',
+    detalle: 'Cuando el contador del menú marca precios pendientes, imprimir las etiquetas nuevas y cambiarlas en góndola.',
     href: '/precios',
   },
   {
-    id: 'cajones',
-    texto: 'Completar cantidades de cajones pendientes',
-    detalle: 'Entrar a Cajones y completar la cantidad real de los que todavía tienen "—" (sin contar).',
-    href: '/ubicaciones',
+    id: 'vencimientos-recepcion',
+    texto: 'Cargar las fechas de vencimiento de lo que se recepciona',
+    detalle: 'Cada pedido que entra tiene que quedar con su fecha de vencimiento cargada en el momento de recepcionarlo.',
+    href: '/recepciones',
   },
   {
-    id: 'traslado-s1',
-    texto: 'Preparar traslado La Pieza → SOHO 1 Local',
-    detalle: 'Miércoles y jueves: armar la lista de lo que hay que llevar desde La Pieza al local.',
-    href: '/reposicion',
-    dias: [2, 3],
+    id: 'vencimientos-30off',
+    texto: 'Controlar vencimientos y poner 30% off lo que vence en 15 días',
+    detalle: 'Revisar el listado de vencimientos: todo lo que vence dentro de los próximos 15 días va con 30% de descuento.',
+    href: '/vencimientos',
   },
   {
-    id: 'traslado-s2',
-    texto: 'Preparar traslado Depósito → SOHO 2 Local',
-    detalle: 'Miércoles y jueves: armar la lista de lo que hay que llevar desde el Depósito al local SOHO 2.',
-    href: '/reposicion',
-    dias: [2, 3],
+    id: 'transferencias-jueves',
+    texto: 'Preparar los pedidos entre SOHO 1 y SOHO 2 y hacer las transferencias',
+    detalle: 'Armar lo que se pasa de un local al otro y dejarlo registrado como transferencia, para que el stock de cada sucursal quede bien.',
+    href: '/transferencias',
+    dias: [3],
+  },
+  {
+    id: 'pedido-algodulce-nova',
+    texto: 'Hacer el pedido de Algo Dulce y Nova',
+    detalle: 'Se pide viernes o sábado.',
+    href: '/compras',
+    dias: [4, 5],
+  },
+  {
+    id: 'pedido-refuerzo',
+    texto: 'Hacer el pedido de refuerzo',
+    detalle: 'Los martes por la mañana.',
+    href: '/compras',
+    dias: [1],
+  },
+  {
+    id: 'promos-pizarra',
+    texto: 'Armar las promos para la pizarra de afuera',
+    detalle: 'Cada 15 días se renuevan las promos que van en la pizarra de la vereda.',
+    href: '/promociones',
+    quincenal: true,
   },
 ]
 
@@ -165,8 +196,13 @@ export default function TareasPage() {
   const [refreshKey,    setRefreshKey]    = useState(0)
 
   // Tasks for today
+  // Una tarea entra en la rutina de hoy si es de todos los días, si hoy es uno
+  // de sus días fijos, o si es quincenal y estamos en la ventana de la quincena.
   const staffHoy = useMemo(
-    () => STAFF.filter(t => !t.dias || t.dias.includes(dia)),
+    () => STAFF.filter(t => {
+      if (t.quincenal) return enVentanaQuincenal()
+      return !t.dias || t.dias.includes(dia)
+    }),
     [dia],
   )
   const todasHoy = useMemo(() => [...staffHoy, ...GESTION], [staffHoy])
@@ -434,8 +470,8 @@ export default function TareasPage() {
       <div>
         <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest mb-3">
           Rutina del día
-          {dia === 2 || dia === 3
-            ? <span className="ml-2 normal-case font-normal text-indigo-500">+ traslados de hoy</span>
+          {staffHoy.some(t => t.dias || t.quincenal)
+            ? <span className="ml-2 normal-case font-normal text-indigo-500">+ tareas de hoy</span>
             : null}
         </p>
         <div className="bg-white rounded-xl border border-zinc-200 divide-y divide-zinc-100 overflow-hidden">
