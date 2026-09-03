@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -95,11 +96,21 @@ export default function EcommercePage() {
   return (
     <div className="p-6 space-y-6 max-w-6xl">
 
-      <div>
-        <h1 className="text-xl font-semibold text-zinc-900">Ecommerce Shuk</h1>
-        <p className="text-sm text-zinc-500 mt-0.5">
-          Línea de granel de shuk.ar · datos en vivo de La Pyme
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-semibold text-zinc-900">Ecommerce Shuk</h1>
+          <p className="text-sm text-zinc-500 mt-0.5">
+            Línea de granel de shuk.ar · datos en vivo de La Pyme
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link href="/ecommerce/catalogo">
+            <Button variant="outline" size="sm" className="text-xs h-8">Catálogo</Button>
+          </Link>
+          <Link href="/ecommerce/recepcion">
+            <Button size="sm" className="text-xs h-8">Recibir bulto</Button>
+          </Link>
+        </div>
       </div>
 
       {error && (

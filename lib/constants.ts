@@ -76,3 +76,25 @@ export const SUCURSALES_DUX: ReadonlyArray<{
   { id: SUCURSALES.SOHO2_LOCAL,    nombre: 'SOHO 2 - Local',    dux_deposito: 15289, dux_sucursal_id: 3 },
   { id: SUCURSALES.SOHO2_DEPOSITO, nombre: 'SOHO 2 - Depósito', dux_deposito: 15513, dux_sucursal_id: 3 },
 ]
+
+// ── Ecommerce Shuk (línea de granel) ─────────────────────────────────
+// Se administra con La Pyme, no con Dux. La unidad es el kilo, con decimales.
+
+/**
+ * Formatos que se ofrecen por defecto al dar de alta un producto de granel.
+ * Son una sugerencia editable por producto, no una regla: cada producto define
+ * los suyos desde /ecommerce/catalogo.
+ */
+export const ECOM_FORMATOS_SUGERIDOS: ReadonlyArray<{ nombre: string; kg: number }> = [
+  { nombre: '1 kg',  kg: 1 },
+  { nombre: '3 kg',  kg: 3 },
+  { nombre: '5 kg',  kg: 5 },
+  { nombre: '10 kg', kg: 10 },
+]
+
+/**
+ * Umbral de la regla del último kilo cuando un producto todavía no tiene
+ * formatos cargados. Con formatos, el umbral es el del formato más chico:
+ * un lote que ya no alcanza para armar el paquete mínimo no se puede vender.
+ */
+export const ECOM_UMBRAL_CIERRE_KG = 1
