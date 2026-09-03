@@ -3,7 +3,7 @@
 import { usePathname } from 'next/navigation'
 import {
   ShoppingCart, Package, Truck, BarChart2, ArrowLeftRight,
-  Tag, Scissors, MapPin, AlertTriangle, CheckSquare, MoveRight, Wallet,
+  Tag, Scissors, MapPin, AlertTriangle, CheckSquare, MoveRight, Wallet, Globe,
 } from 'lucide-react'
 import { NavLink, NavSection } from './nav-link'
 import { PreciosBadge } from './precios-badge'
@@ -60,6 +60,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <NavSection label="Producción" />
           <NavLink href="/fraccionamiento" icon={<Scissors size={14} />}>Fraccionamiento</NavLink>
           <NavLink href="/ubicaciones" icon={<MapPin size={14} />}>Ubicaciones</NavLink>
+
+          {/* Línea de granel de shuk.ar. Va en su propio grupo a propósito: se
+              administra con La Pyme, no con Dux, y no comparte stock ni compras
+              con el resto del sistema. */}
+          <NavSection label="Ecommerce" />
+          <NavLink href="/ecommerce" icon={<Globe size={14} />}>Shuk</NavLink>
 
         </nav>
 
