@@ -66,6 +66,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               con el resto del sistema. */}
           <NavSection label="Ecommerce" />
           <NavLink href="/ecommerce" icon={<Globe size={14} />}>Shuk</NavLink>
+          <NavLink href="/ecommerce/recepciones" icon={<Truck size={14} />}>Recepciones Shuk</NavLink>
 
         </nav>
 

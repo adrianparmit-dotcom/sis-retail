@@ -26,6 +26,7 @@ export const LAPYME_RECURSOS_PERMITIDOS = [
   'stock-movements',
   'stock-transfers',
   'sales',
+  'purchases',
   'webhook-endpoints',
 ] as const
 
@@ -98,6 +99,45 @@ export interface Pedido {
   created_at?: string
   customer?: { name?: string } | null
   total?: number
+}
+
+/** Una compra tal como la lista el ERP. Las líneas solo vienen en el detalle. */
+export interface Compra {
+  id: string
+  supplier_invoice_number: string | null
+  invoice_date: string
+  /** En centavos. */
+  total: number
+  supplier: { id: string; name: string } | null
+}
+
+/**
+ * Línea de una factura.
+ *
+ * `product` viene en null: la IA de La Pyme extrae el texto de la factura pero
+ * no lo mapea al catálogo. El producto se asigna del lado de SOHO.
+ */
+export interface CompraItem {
+  id: string
+  name: string
+  quantity: number
+  /** En centavos. */
+  unit_cost: number
+  total: number
+  product: { id: string; name: string; sku: string | null } | null
+}
+
+export interface CompraDetalle extends Compra {
+  items: CompraItem[]
+  /**
+   * Si la compra ya movió stock en el ERP. En las facturas cargadas hasta ahora
+   * viene 'none': cargar la factura NO toca el inventario, así que la habilitación
+   * de venta desde SOHO no pisa nada que el ERP haya hecho antes.
+   */
+  inventory_effect: string
+  products_received: boolean
+  /** Para poder abrir el PDF original de la factura desde la pantalla. */
+  document?: { status: string; url: string } | null
 }
 
 // ── Llamadas desde el navegador ──────────────────────────────────────
