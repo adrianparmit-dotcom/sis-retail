@@ -10,7 +10,6 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
-import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -102,14 +101,6 @@ export default function EcommercePage() {
           <p className="text-sm text-zinc-500 mt-0.5">
             Línea de granel de shuk.ar · datos en vivo de La Pyme
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link href="/ecommerce/catalogo">
-            <Button variant="outline" size="sm" className="text-xs h-8">Catálogo</Button>
-          </Link>
-          <Link href="/ecommerce/recepcion">
-            <Button size="sm" className="text-xs h-8">Recibir bulto</Button>
-          </Link>
         </div>
       </div>
 
