@@ -45,16 +45,35 @@ function normalizarTipoComprobante(raw: string): string {
 }
 
 /**
- * El número se manda tal cual viene de la factura; solo se limpian espacios.
+ * Formato del número de comprobante: `A-00002-00039587`.
  *
- * Se probó repadear a PPPP-NNNNNNNN siguiendo el ejemplo de la documentación
- * ("0001-00001234"), pero las compras reales del ERP muestran el punto de venta
- * con CINCO dígitos —"A-00007-00015420", "A-00001-00005119"—, así que recortar
- * a cuatro rompía justo los comprobantes que ya estaban bien. Dux acepta los
- * dos anchos y arma él la cadena final con la letra adelante.
+ * Dux NO arma la cadena final poniéndole la letra adelante, como se creía: la
+ * espera ya armada. Las 5 facturas fiscales que hoy viven en el ERP están
+ * guardadas todas como LETRA-PPPPP-NNNNNNNN (punto de venta de 5, número de 8),
+ * y las 10 recepciones que la app mandó sin la letra volvieron con
+ * "400 Comprobante no reconocido" — el único motivo por el que la recepción
+ * automática nunca llegó a dar de alta una compra.
+ *
+ * Repadear el punto de venta a 5 dígitos es seguro: los ceros a la izquierda no
+ * cambian de qué punto de venta se trata, y 5-8 es la forma canónica del ERP.
+ *
+ * Un número que no tenga la forma PV-NÚMERO se manda tal cual. Ese es el caso
+ * de los COMPROBANTE_COMPRA (documentos X), que usan la numeración interna de
+ * Dux —13 dígitos corridos— y no llevan letra.
  */
-function normalizarNroComprobante(raw: string): string {
-  return raw.trim().replace(/\s+/g, '')
+function normalizarNroComprobante(raw: string, tipoComprobante: string): string {
+  const limpio = raw.trim().replace(/\s+/g, '')
+
+  // Si ya viene con la letra adelante, se respeta la que trae.
+  const conLetra = /^([ABCEM])-?(\d.*)$/.exec(limpio)
+  const cuerpo = conLetra ? conLetra[2] : limpio
+
+  const partes = /^(\d{1,5})-(\d{1,8})$/.exec(cuerpo)
+  if (!partes) return limpio
+
+  const letra = conLetra?.[1] ?? /^FACTURA ([ABCEM])$/.exec(tipoComprobante)?.[1]
+  const numero = `${partes[1].padStart(5, '0')}-${partes[2].padStart(8, '0')}`
+  return letra ? `${letra}-${numero}` : numero
 }
 
 export async function POST(req: NextRequest) {
@@ -97,10 +116,12 @@ export async function POST(req: NextRequest) {
   // viejos (que guardaron la letra suelta) también salgan bien.
   payload['tipo_comprobante'] = normalizarTipoComprobante(String(payload['tipo_comprobante']))
 
-  // nro_comprobante: Dux espera PPPP-NNNNNNNN (4 dígitos de punto de venta,
-  // 8 de número). Las facturas llegan con anchos variables — "00007-00015420"
-  // — y el ERP las rechaza. Se re-padea cuando el número entra en el formato.
-  payload['nro_comprobante'] = normalizarNroComprobante(String(payload['nro_comprobante']))
+  // nro_comprobante: va DESPUÉS de tipo_comprobante porque de ahí saca la letra
+  // que hay que anteponerle ("FACTURA A" → "A-00002-00039587").
+  payload['nro_comprobante'] = normalizarNroComprobante(
+    String(payload['nro_comprobante']),
+    String(payload['tipo_comprobante']),
+  )
 
   // Sanitize y convertir al schema real de Dux v2:
   //   - Array root key: "productos"
