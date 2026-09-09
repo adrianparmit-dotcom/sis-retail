@@ -1025,6 +1025,25 @@ export default function RecepcionFacturaPage() {
     setDestinoId(prev => (prev === sucursalId ? null : prev))
   }, [sucursalId])
 
+  // El destino se guarda solo, como las cantidades de cada ítem. Antes viajaba
+  // únicamente con "Guardar borrador" o al confirmar: si una persona elegía el
+  // destino y otra abría el borrador, veía las cantidades a partir sin saber a
+  // dónde iban.
+  useEffect(() => {
+    if (!borradorId) return
+    // El builder de supabase-js es lazy: no dispara el request hasta que se
+    // espera. Sin este await el update se armaba y se descartaba en silencio.
+    const guardarDestino = async () => {
+      const { error } = await supabase.from('recepciones').update({
+        sucursal_destino_id: destinoId,
+        last_edited_by     : CLIENT_ID,
+        updated_at         : new Date().toISOString(),
+      }).eq('id', borradorId)
+      if (error) toast.error('No se pudo guardar el destino: ' + error.message)
+    }
+    void guardarDestino()
+  }, [destinoId, borradorId])
+
   /** Sucursal destino válida (elegida y distinta de la de recepción), o null. */
   const destinoSucursal = useMemo(
     () => (destinoId && destinoId !== sucursalId
@@ -2132,6 +2151,34 @@ export default function RecepcionFacturaPage() {
           <div><span className="text-zinc-400">Sucursal:</span> <span className="font-medium">{SUCURSALES.find(s => s.id === sucursalId)?.nombre}</span></div>
           <div><span className="text-zinc-400">Margen:</span> <span className="font-medium">{(margenProveedor * 100).toFixed(0)}%</span></div>
           <div><span className="text-zinc-400">Costo total:</span> <span className="font-medium">${stats.totalCosto.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</span></div>
+
+          {/* Destino para partir mercadería.
+              Va acá y no solo en la pantalla de pegar la factura: al abrir un
+              borrador se entra directo a esta pantalla, así que allá el
+              selector quedaba fuera de alcance y la columna de reparto no
+              había forma de habilitarla. */}
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-zinc-400">Partir hacia:</span>
+            <Select
+              value={destinoId ?? SIN_DESTINO}
+              onValueChange={v => setDestinoId(!v || v === SIN_DESTINO ? null : v)}
+            >
+              {/* La etiqueta se escribe a mano en vez de usar <SelectValue />:
+                  Base UI resuelve el texto del ítem recién cuando el popup se
+                  monta, así que al entrar mostraba el valor crudo ("ninguno"). */}
+              <SelectTrigger className="h-7 w-[190px] text-sm">
+                <span className="flex flex-1 text-left">
+                  {destinoSucursal ? destinoSucursal.nombre : 'No partir'}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={SIN_DESTINO}>No partir</SelectItem>
+                {SUCURSALES.filter(s => s.id !== sucursalId).map(s => (
+                  <SelectItem key={s.id} value={s.id}>{s.nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         {/* Pending mapping notice */}
