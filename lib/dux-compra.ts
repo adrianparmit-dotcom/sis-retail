@@ -31,6 +31,18 @@ export function tipoComprobanteDux(letra: LetraComprobante): string {
   return letra === 'X' ? 'COMPROBANTE_COMPRA' : `FACTURA ${letra}`
 }
 
+/**
+ * Si el comprobante discrimina IVA, y por lo tanto si el costo de la línea
+ * viene neto y hay que sumarle el IVA para llegar al costo real.
+ *
+ * Solo la Factura A lo discrimina. En B y C el IVA ya está adentro del importe
+ * (el proveedor no lo separa) y en X no hay IVA que sumar: en los tres casos
+ * agregarlo otra vez inflaría el precio de venta un 21%.
+ */
+export function discriminaIva(letra: LetraComprobante): boolean {
+  return letra === 'A'
+}
+
 export type ReenvioResultado =
   | { ok: true }
   | { ok: false; motivo: string; detalle?: string }

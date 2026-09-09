@@ -26,6 +26,15 @@ export const GONDOLA_MAX_UNITS    = 6   // Max units suggested for floor display
 export const PAGE_SIZE            = 50  // Standard items per page
 export const INVERSION_ALERTA_PESOS = 500_000
 
+/**
+ * Bonificación por llevar el blister cerrado, sobre el precio de la unidad
+ * suelta: precio_blister = precio_unidad × unidades × (1 − DESCUENTO_BLISTER).
+ */
+export const DESCUENTO_BLISTER = 0.20
+
+/** Los precios de góndola se mueven de a 100 pesos, redondeando para arriba. */
+export const REDONDEO_PRECIO = 100
+
 // Cobertura thresholds (days)
 export const DIAS_COBERTURA = {
   CRITICA: 7,
@@ -76,3 +85,18 @@ export const SUCURSALES_DUX: ReadonlyArray<{
   { id: SUCURSALES.SOHO2_LOCAL,    nombre: 'SOHO 2 - Local',    dux_deposito: 15289, dux_sucursal_id: 3 },
   { id: SUCURSALES.SOHO2_DEPOSITO, nombre: 'SOHO 2 - Depósito', dux_deposito: 15513, dux_sucursal_id: 3 },
 ]
+
+/** True si la sucursal pertenece a la cadena SOHO 2. */
+export function esCadenaSoho2(sucursalId: string): boolean {
+  return sucursalId === SUCURSALES.SOHO2_LOCAL || sucursalId === SUCURSALES.SOHO2_DEPOSITO
+}
+
+/**
+ * Destino propuesto al partir una recepción: el local de la otra cadena.
+ * Va al LOCAL y no al depósito porque es donde termina la mercadería: el código
+ * viejo mandaba fijo a SOHO 1 - La Pieza y en la práctica se recibía en el
+ * local. Es solo el valor inicial del selector — se puede cambiar en pantalla.
+ */
+export function destinoTransferenciaSugerido(origenId: string): string {
+  return esCadenaSoho2(origenId) ? SUCURSALES.SOHO1_LOCAL : SUCURSALES.SOHO2_LOCAL
+}

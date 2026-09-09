@@ -20,12 +20,12 @@ import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { parseFactura, calcPrecioVenta, detectProveedorType } from '@/lib/invoice-parsers'
+import { parseFactura, calcPrecioVenta, calcPrecioBlister, detectProveedorType } from '@/lib/invoice-parsers'
 import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorToPDF, type DocumentoProveedor } from '@/lib/proveedor-doc'
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
 import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
-import { tipoComprobanteDux, type LetraComprobante } from '@/lib/dux-compra'
+import { tipoComprobanteDux, discriminaIva, type LetraComprobante } from '@/lib/dux-compra'
 import { hoyISO } from '@/lib/format'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { normalizeText } from '@/lib/search'
@@ -39,8 +39,14 @@ import { CheckCircle2, HelpCircle, Download, Loader2, ChevronRight, Save, Users,
 // ── Constants ────────────────────────────────────────────────────
 
 const SUCURSALES = SUCURSALES_DUX
-const esSoho2 = (sucId: string) =>
-  sucId === SUCS.SOHO2_LOCAL || sucId === SUCS.SOHO2_DEPOSITO
+
+/** Valor del selector de destino cuando no se parte nada hacia la otra sucursal. */
+const SIN_DESTINO = 'ninguno'
+
+/** "SOHO 2 - Depósito" → "S2 Depósito", para que entre en el encabezado angosto. */
+function etiquetaCorta(nombre: string): string {
+  return nombre.replace(/^SOHO\s*(\d)\s*-\s*/i, 'S$1 ')
+}
 
 const PROVEEDOR_LABELS: Record<ProveedorType | 'auto', string> = {
   auto : 'Auto-detectar',
@@ -62,6 +68,9 @@ interface Producto {
   costo            : number | null
   proveedor_id_dux : number | null
   categoria        : string | null
+  // Vínculo blister ↔ unidad: en la fila de la UNIDAD apunta a su blister.
+  blister_producto_id : string | null
+  unidades_por_blister: number | null
 }
 
 type Step = 'paste' | 'review' | 'done'
@@ -194,7 +203,7 @@ function ProductSearch({ productos, initialQuery, supplierContext, onSelect, onC
         // Build OR filter: match sku exactly, barcode exactly, or name contains all tokens
         const tokens = query.toLowerCase().replace(/[^a-z0-9áéíóúñ\s]+/g, ' ').split(/\s+/).filter(t => t.length >= 2)
         let req = supabase.from('productos')
-          .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria')
+          .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria,blister_producto_id,unidades_por_blister')
           .limit(20)
         if (tokens.length === 0) return
         // If it looks like a pure code (no spaces, <= 12 chars) try exact first
@@ -607,6 +616,10 @@ export default function RecepcionFacturaPage() {
   const [tipoProveedor, setTipoProveedor]     = useState<ProveedorType | 'auto'>('auto')
   const [letraComprobante, setLetraComprobante] = useState<LetraComprobante>('A')
   const [sucursalId, setSucursalId]           = useState(SUCURSALES[0].id)
+  // Sucursal a la que se parten cantidades de esta recepción. Vacío = no se
+  // parte nada, que es el caso normal; se elige en pantalla y ya no depende de
+  // en qué cadena se recibe.
+  const [destinoId, setDestinoId]             = useState<string | null>(null)
   const [factura, setFactura]                 = useState<ParsedFactura | null>(null)
   const [items, setItems]                     = useState<InvoiceLineItem[]>([])
 
@@ -725,7 +738,7 @@ export default function RecepcionFacturaPage() {
       // en silencio para todo producto fuera de las primeras 1000 filas.
       const [prods, mapRows, aliasRows] = await Promise.all([
         fetchAllFromView<Producto>('productos', {
-          select: 'id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria',
+          select: 'id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria,blister_producto_id,unidades_por_blister',
           order: { column: 'nombre' },
         }),
         fetchAllFromView<SkuMapEntry>('proveedor_sku_map'),
@@ -758,6 +771,7 @@ export default function RecepcionFacturaPage() {
     const rec = recRes.data as {
       proveedor_nombre: string | null; nro_comprobante?: string | null; numero_comprobante?: string | null
       fecha_factura: string | null; sucursal_id: string | null; texto_original: string | null
+      sucursal_destino_id?: string | null
     }
 
     const inv: ParsedFactura = {
@@ -843,7 +857,7 @@ export default function RecepcionFacturaPage() {
     if (matchedProductIds.length > 0) {
       const { data: prodRows } = await supabase
         .from('productos')
-        .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria')
+        .select('id,sku,nombre,codigo_barras,codigo_externo,precio_venta,costo,proveedor_id_dux,categoria,blister_producto_id,unidades_por_blister')
         .in('id', matchedProductIds)
       for (const p of (prodRows ?? []) as Producto[]) {
         prodByIdForBorrador.set(p.id, p)
@@ -884,6 +898,7 @@ export default function RecepcionFacturaPage() {
     })
 
     setSucursalId(rec.sucursal_id ?? SUCURSALES[0].id)
+    setDestinoId(rec.sucursal_destino_id ?? null)
     setTexto(rec.texto_original ?? '')
     setFactura(inv)
     setItems(reconstructed)
@@ -919,12 +934,115 @@ export default function RecepcionFacturaPage() {
       })
   }, [factura?.proveedor_nombre])
 
+  // ── Precio de blister y unidad, juntos ────────────────────────
+
+  /** Índices para resolver el par blister ↔ unidad en cualquier sentido. */
+  const paresBlister = useMemo(() => {
+    const porId       = new Map(productos.map(p => [p.id, p]))
+    // Clave = id del BLISTER; valor = su unidad y cuántas trae.
+    const porBlister  = new Map<string, { unidad: Producto; unidades: number }>()
+    for (const p of productos) {
+      if (p.blister_producto_id && p.unidades_por_blister) {
+        porBlister.set(p.blister_producto_id, { unidad: p, unidades: p.unidades_por_blister })
+      }
+    }
+    return { porId, porBlister }
+  }, [productos])
+
+  /**
+   * Precio sugerido de una línea, más el precio de su pareja.
+   *
+   * La factura puede caer sobre cualquiera de los dos SKUs y hay que resolver
+   * los dos precios igual, porque en Dux son productos distintos y hasta ahora
+   * se actualizaban por separado (200 de 247 blisters no tenían precio).
+   *
+   *   · Línea sobre el BLISTER (el caso normal, es lo que se compra):
+   *       costo_unidad   = costo_blister / unidades
+   *       precio_unidad  = redondeo100( costo_unidad × (1+IVA) × (1+margen) )
+   *       precio_blister = redondeo100( precio_unidad × unidades × (1−20%) )
+   *   · Línea sobre la UNIDAD: el precio propio sale del costo y el del blister
+   *       se deriva con la misma bonificación.
+   *   · Sin par conocido: como siempre, el costo de la línea con su margen.
+   */
+  const preciosDeLinea = useCallback((item: InvoiceLineItem): {
+    propio: number
+    pareja: { codigo: string; importe: number } | null
+  } => {
+    const opts = { ivaPorcentaje: item.iva_porcentaje, discriminaIva: discriminaIva(letraComprobante) }
+    const base = calcPrecioVenta(item.costo_unitario, margenProveedor, opts)
+    if (!item.producto_id || margenProveedor <= 0) return { propio: base, pareja: null }
+
+    const comoBlister = paresBlister.porBlister.get(item.producto_id)
+    if (comoBlister) {
+      const precioUnidad = calcPrecioVenta(item.costo_unitario / comoBlister.unidades, margenProveedor, opts)
+      return {
+        propio: calcPrecioBlister(precioUnidad, comoBlister.unidades),
+        pareja: precioUnidad > 0 ? { codigo: comoBlister.unidad.sku, importe: precioUnidad } : null,
+      }
+    }
+
+    const prod = paresBlister.porId.get(item.producto_id)
+    if (prod?.blister_producto_id && prod.unidades_por_blister) {
+      const blister = paresBlister.porId.get(prod.blister_producto_id)
+      const precioBlister = calcPrecioBlister(base, prod.unidades_por_blister)
+      return {
+        propio: base,
+        pareja: blister && precioBlister > 0 ? { codigo: blister.sku, importe: precioBlister } : null,
+      }
+    }
+    return { propio: base, pareja: null }
+  }, [paresBlister, margenProveedor, letraComprobante])
+
+  /** Precios de la pareja de cada línea, sin repetir SKU. */
+  const construirPreciosBlister = useCallback((lineas: InvoiceLineItem[]) => {
+    const salida: { codigo: string; importe: number }[] = []
+    const yaPuesto = new Set<string>()
+    for (const linea of lineas) {
+      const { pareja } = preciosDeLinea(linea)
+      if (!pareja || yaPuesto.has(pareja.codigo)) continue
+      yaPuesto.add(pareja.codigo)
+      salida.push(pareja)
+    }
+    return salida
+  }, [preciosDeLinea])
+
+  // La letra del comprobante decide si el costo viene neto (A) o con IVA
+  // adentro (B, C, X), así que cambiarla mueve todos los precios sugeridos.
+  // Sin esto, elegir la letra después de mapear dejaba los precios calculados
+  // con el criterio anterior y nadie lo veía hasta mirar la góndola.
+  useEffect(() => {
+    if (margenProveedor <= 0) return
+    setItems(prev => prev.map(it => {
+      if (!it.producto_id || it.es_granel) return it
+      const pv = preciosDeLinea(it).propio
+      return pv === it.precio_venta_sugerido ? it : { ...it, precio_venta_sugerido: pv }
+    }))
+  }, [preciosDeLinea, margenProveedor])
+
+  // Partir hacia la propia sucursal donde se recibe no significa nada: si al
+  // cambiar la sucursal el destino queda igual al origen, se limpia.
+  useEffect(() => {
+    setDestinoId(prev => (prev === sucursalId ? null : prev))
+  }, [sucursalId])
+
+  /** Sucursal destino válida (elegida y distinta de la de recepción), o null. */
+  const destinoSucursal = useMemo(
+    () => (destinoId && destinoId !== sucursalId
+      ? SUCURSALES.find(s => s.id === destinoId) ?? null
+      : null),
+    [destinoId, sucursalId],
+  )
+
   // ── Matching ─────────────────────────────────────────────────
 
   function applyMatch(item: InvoiceLineItem, p: Producto, confidence: MatchConfidence): InvoiceLineItem {
     const esGranel  = p.categoria?.toUpperCase() === 'GRANEL'
     const esBlister = item.es_blister || /^BLISTER\s/i.test(p.nombre ?? '')
-    const pv = margenProveedor > 0 ? calcPrecioVenta(item.costo_unitario, margenProveedor) : (p.precio_venta ?? 0)
+    // El precio se resuelve con el producto ya asignado, para que un blister
+    // tome el precio derivado de su unidad y no el de su propio costo.
+    const pv = margenProveedor > 0
+      ? preciosDeLinea({ ...item, producto_id: p.id }).propio
+      : (p.precio_venta ?? 0)
 
     // Producto de categoría GRANEL: el renglón de la factura es un bulto madre,
     // que no tiene UN producto sino N fraccionados. Antes se guardaba el elegido
@@ -1021,6 +1139,7 @@ export default function RecepcionFacturaPage() {
       fecha_recepcion    : hoyISO(),
       estado             : 'borrador',
       sucursal_id        : sucursalId,
+      sucursal_destino_id: destinoId,
       texto_original     : textoOrig,
       last_edited_by     : CLIENT_ID,
     }).select('id').single()
@@ -1136,8 +1255,10 @@ export default function RecepcionFacturaPage() {
         else estado = 'ok'
         merged.estado_recepcion = estado
       }
-      if (patch.costo_unitario !== undefined && margenProveedor > 0) {
-        merged.precio_venta_sugerido = calcPrecioVenta(merged.costo_unitario, margenProveedor)
+      // El IVA entra en el precio cuando el comprobante lo discrimina, así que
+      // cambiar la alícuota de la línea también mueve el precio sugerido.
+      if ((patch.costo_unitario !== undefined || patch.iva_porcentaje !== undefined) && margenProveedor > 0) {
+        merged.precio_venta_sugerido = preciosDeLinea(merged).propio
       }
       next[idx] = merged
       return next
@@ -1269,10 +1390,11 @@ export default function RecepcionFacturaPage() {
         }
       } else {
         await supabase.from('recepciones').update({
-          estado         : 'borrador',
-          sucursal_id    : sucursalId,
-          last_edited_by : CLIENT_ID,
-          updated_at     : new Date().toISOString(),
+          estado              : 'borrador',
+          sucursal_id         : sucursalId,
+          sucursal_destino_id : destinoId,
+          last_edited_by      : CLIENT_ID,
+          updated_at          : new Date().toISOString(),
         }).eq('id', recId)
         await flushPendingSaves()
       }
@@ -1446,6 +1568,7 @@ export default function RecepcionFacturaPage() {
       await supabase.from('recepciones').update({
         estado          : 'confirmada',
         sucursal_id     : sucursalId,
+        sucursal_destino_id: destinoSucursal?.id ?? null,
         fecha_recepcion : hoyISO(),
         // Se guarda para poder rearmar el payload de Dux al reintentar desde la
         // lista: antes la letra solo vivía en el estado de esta pantalla.
@@ -1505,15 +1628,18 @@ export default function RecepcionFacturaPage() {
         }
       }
 
-      // ── 3. Crear transferencia interna si hay ítems para S1 ──
-      const itemsATransferir = items.filter(
-        i => i.producto_id && !i.es_granel && (i.transferir_cantidad ?? 0) > 0
-      )
-      if (itemsATransferir.length > 0) {
+      // ── 3. Crear transferencia interna hacia la sucursal destino ──
+      // El destino sale del selector de pantalla (guardado en la recepción), no
+      // de la cadena en la que se recibe: hoy se puede recibir en SOHO 1 y
+      // partir hacia SOHO 2 igual que al revés.
+      const itemsATransferir = destinoSucursal
+        ? items.filter(i => i.producto_id && !i.es_granel && (i.transferir_cantidad ?? 0) > 0)
+        : []
+      if (destinoSucursal && itemsATransferir.length > 0) {
         const { data: transf } = await supabase.from('transferencias_recepcion').insert({
           recepcion_id        : recId,
           sucursal_origen_id  : sucursalId,
-          sucursal_destino_id : SUCS.SOHO1_PIEZA,
+          sucursal_destino_id : destinoSucursal.id,
           estado              : 'pendiente',
         }).select('id').single()
         const transfId = (transf as { id: string } | null)?.id ?? null
@@ -1665,17 +1791,31 @@ export default function RecepcionFacturaPage() {
         i.producto_sku && i.precio_venta_sugerido > 0 &&
         Math.abs((i.producto_precio_actual ?? 0) - i.precio_venta_sugerido) > 0.01
       )
-      if (priceItems.length > 0) {
+
+      // Precios acompañantes del blister.
+      //
+      // Blister y unidad son dos SKUs distintos en Dux y hasta ahora se
+      // actualizaban por separado, así que el blister quedaba con el precio
+      // viejo (o sin precio: 200 de 247 no tenían). Cuando la línea de factura
+      // cayó sobre una unidad que tiene blister vinculado, se manda también el
+      // precio del blister derivado del de la unidad.
+      const preciosBlister = construirPreciosBlister(priceItems)
+      const todosLosPrecios = [
+        ...priceItems.map(i => ({ codigo: i.producto_sku!, importe: i.precio_venta_sugerido })),
+        ...preciosBlister,
+      ]
+
+      if (todosLosPrecios.length > 0) {
         const res = await fetch('/api/dux/exportar-precios', {
           method : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body   : JSON.stringify({ items: priceItems.map(i => ({ codigo: i.producto_sku!, importe: i.precio_venta_sugerido })) }),
+          body   : JSON.stringify({ items: todosLosPrecios }),
         })
         if (res.ok) {
           setPriceExcelUrl(URL.createObjectURL(await res.blob()))
-          setPriceExcelCount(priceItems.length)
+          setPriceExcelCount(todosLosPrecios.length)
           // Mismo set de precios, listo para mandarlo por API si lo confirman.
-          setPreciosPayload(priceItems.map(i => ({ codigo: i.producto_sku!, importe: i.precio_venta_sugerido })))
+          setPreciosPayload(todosLosPrecios)
         }
       }
 
@@ -1695,6 +1835,25 @@ export default function RecepcionFacturaPage() {
         '',
         `✅ OK: ${ok}  ❌ Faltantes: ${faltante}  ➕ Extras: ${extra}  ⚠️ Vencidos: ${vencLlegada}  ❓ Sin match: ${sinMatch}`,
       ]
+
+      // Reparto por sucursal. Sin esto el informe hablaba de una sola sucursal
+      // aunque parte de la mercadería se fuera a la otra, y el que lo leía no
+      // tenía forma de saber cuánto quedaba realmente en cada lado.
+      if (itemsATransferir.length > 0 && destinoSucursal) {
+        const totalRecibido = items.reduce((s, i) => s + (i.cantidad_recibida ?? 0), 0)
+        const totalAPartir  = itemsATransferir.reduce((s, i) => s + (i.transferir_cantidad ?? 0), 0)
+        lines.push(
+          '',
+          `📦 REPARTO POR SUCURSAL (${totalRecibido} unidades recibidas):`,
+          `  · ${sucursal.nombre}: ${totalRecibido - totalAPartir} unidades`,
+          `  · ${destinoSucursal.nombre}: ${totalAPartir} unidades (${itemsATransferir.length} productos) — transferencia pendiente de cargar en Dux`,
+          '',
+          `  Detalle de lo que se parte a ${destinoSucursal.nombre}:`,
+          ...itemsATransferir.map(i =>
+            `    · ${i.producto_sku ?? i.sku_proveedor}  ${i.producto_nombre ?? i.descripcion_proveedor} — ${i.transferir_cantidad} de ${i.cantidad_recibida}`
+          ),
+        )
+      }
       if (granel.length) {
         lines.push('', `🌾 GRANEL — PENDIENTE FRACCIONAMIENTO (${granel.length}):`)
         granel.forEach(i => lines.push(`  · ${i.producto_nombre ?? i.descripcion_proveedor} — ${i.cantidad} ${i.producto_sku?.includes('KG') ? 'kg' : 'und'} (recibido: ${i.cantidad_recibida})`))
@@ -1726,7 +1885,7 @@ export default function RecepcionFacturaPage() {
     }
     // createBorradorFromParsed is intentionally not declared as a dep (stable at runtime)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [factura, items, sucursalId, texto, borradorId, margenProveedor, flushPendingSaves])
+  }, [factura, items, sucursalId, texto, borradorId, margenProveedor, flushPendingSaves, destinoSucursal, letraComprobante, construirPreciosBlister])
 
   // ── Stats ─────────────────────────────────────────────────────
 
@@ -1823,13 +1982,39 @@ export default function RecepcionFacturaPage() {
             </Select>
           </div>
           <div>
-            <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-1 block">Sucursal destino</label>
+            <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-1 block">Sucursal que recibe</label>
             <Select value={sucursalId} onValueChange={v => setSucursalId(v ?? SUCURSALES[0].id)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              {/* Base UI muestra el value crudo si no se le da el texto: sin esto
+                  el campo mostraba el UUID de la sucursal en vez del nombre. */}
+              <SelectTrigger>
+                <SelectValue>{() => SUCURSALES.find(s => s.id === sucursalId)?.nombre ?? 'Elegir sucursal'}</SelectValue>
+              </SelectTrigger>
               <SelectContent>
                 {SUCURSALES.map(s => <SelectItem key={s.id} value={s.id}>{s.nombre}</SelectItem>)}
               </SelectContent>
             </Select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-1 block">Partir hacia</label>
+            <Select
+              value={destinoId ?? SIN_DESTINO}
+              onValueChange={v => setDestinoId(!v || v === SIN_DESTINO ? null : v)}
+            >
+              <SelectTrigger>
+                <SelectValue>{() => destinoSucursal?.nombre ?? 'No partir — queda todo acá'}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={SIN_DESTINO}>No partir — queda todo acá</SelectItem>
+                {SUCURSALES.filter(s => s.id !== sucursalId).map(s => (
+                  <SelectItem key={s.id} value={s.id}>{s.nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-zinc-400 mt-1">
+              {destinoSucursal
+                ? `Se habilita la columna "→ ${etiquetaCorta(destinoSucursal.nombre)}" para repartir unidades.`
+                : 'Elegí una sucursal para repartir parte de la mercadería.'}
+            </p>
           </div>
         </div>
 
@@ -1981,8 +2166,10 @@ export default function RecepcionFacturaPage() {
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500">Producto sistema</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-14">Fact.</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-20">Recibido</th>
-                  {esSoho2(sucursalId) && (
-                    <th className="text-right px-2 py-2 text-xs font-medium text-indigo-500 w-16" title="Unidades a transferir a SOHO 1">→ S1</th>
+                  {destinoSucursal && (
+                    <th className="text-right px-2 py-2 text-xs font-medium text-indigo-500 w-16" title={`Unidades a transferir a ${destinoSucursal.nombre}`}>
+                      → {etiquetaCorta(destinoSucursal.nombre)}
+                    </th>
                   )}
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-22">Costo</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-24">P.Venta sug.</th>
@@ -2083,8 +2270,8 @@ export default function RecepcionFacturaPage() {
                         )}
                       </td>
 
-                      {/* Transfer to S1 — only visible when receiving at SOHO 2 */}
-                      {esSoho2(sucursalId) && (
+                      {/* Partir hacia la otra sucursal — solo si se eligió destino */}
+                      {destinoSucursal && (
                         <td className="px-2 py-2 text-right">
                           {item.producto_id && !item.es_granel ? (
                             <input
@@ -2093,7 +2280,7 @@ export default function RecepcionFacturaPage() {
                               value={item.transferir_cantidad ?? 0}
                               onChange={e => updateItem(i, { transferir_cantidad: parseInt(e.target.value) || 0 })}
                               className="w-14 text-right border border-indigo-200 rounded px-1 py-1 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-indigo-50"
-                              title="Unidades a transferir a SOHO 1"
+                              title={`Unidades a transferir a ${destinoSucursal.nombre}`}
                             />
                           ) : (
                             <span className="text-zinc-300 text-xs">—</span>
@@ -2408,11 +2595,12 @@ export default function RecepcionFacturaPage() {
         {/* Transferencia interna pendiente */}
         {transferenciaId && (() => {
           const itemsT = items.filter(i => i.producto_id && !i.es_granel && (i.transferir_cantidad ?? 0) > 0)
-          const sucOrigen = SUCURSALES.find(s => s.id === sucursalId)?.nombre ?? 'SOHO 2'
+          const sucOrigen  = SUCURSALES.find(s => s.id === sucursalId)?.nombre ?? '—'
+          const sucDestino = destinoSucursal?.nombre ?? '—'
           const totalUnidades = itemsT.reduce((s, i) => s + (i.transferir_cantidad ?? 0), 0)
           const textoTransferencia = [
             `TRANSFERENCIA INTERNA PENDIENTE`,
-            `De: ${sucOrigen}  →  A: SOHO 1 - La Pieza`,
+            `De: ${sucOrigen}  →  A: ${sucDestino}`,
             `Fecha recepción: ${new Date().toLocaleDateString('es-AR')}`,
             '',
             ...itemsT.map(i =>
@@ -2428,7 +2616,7 @@ export default function RecepcionFacturaPage() {
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
                   <p className="text-sm font-semibold text-indigo-900">
-                    🔄 Transferencia interna pendiente — {sucOrigen} → SOHO 1
+                    🔄 Transferencia interna pendiente — {sucOrigen} → {sucDestino}
                   </p>
                   <p className="text-xs text-indigo-700 mt-0.5">
                     {itemsT.length} productos · {totalUnidades} unidades totales
@@ -2469,7 +2657,7 @@ export default function RecepcionFacturaPage() {
                 </table>
               </div>
               <p className="text-xs text-indigo-600">
-                <strong>Dux:</strong> Movimientos → Transferencia interna → De {sucOrigen} → A SOHO 1 La Pieza
+                <strong>Dux:</strong> Movimientos → Transferencia interna → De {sucOrigen} → A {sucDestino}
               </p>
             </div>
           )

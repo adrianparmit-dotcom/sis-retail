@@ -10,6 +10,7 @@
  */
 
 import type { InvoiceLineItem, ParsedFactura, ProveedorType } from './types'
+import { DESCUENTO_BLISTER, REDONDEO_PRECIO } from './constants'
 
 // ─── helpers ────────────────────────────────────────────────────────
 
@@ -397,10 +398,54 @@ export function parseFactura(text: string, tipo?: ProveedorType | 'auto'): Parse
   }
 }
 
-/** Apply margin to calculate suggested sale price */
-export function calcPrecioVenta(costo: number, margen: number): number {
+/**
+ * Redondeo comercial: al múltiplo de 100 inmediatamente superior.
+ * Los precios de góndola se manejan de 100 en 100, y siempre para arriba para
+ * no comerse margen en el redondeo.
+ */
+export function redondearA100(valor: number): number {
+  if (!Number.isFinite(valor) || valor <= 0) return 0
+  return Math.ceil(valor / REDONDEO_PRECIO) * REDONDEO_PRECIO
+}
+
+/**
+ * Precio de venta sugerido a partir del costo de la factura.
+ *
+ * El costo de una Factura A viene NETO: hay que sumarle el IVA para llegar al
+ * costo real antes de aplicar el margen. En B, C y X el importe ya lo trae
+ * adentro, así que sumarlo otra vez inflaría el precio un 21%.
+ *
+ * `discriminaIva` sale de la letra del comprobante — ver `discriminaIva()` en
+ * `lib/dux-compra.ts`.
+ */
+export function calcPrecioVenta(
+  costo : number,
+  margen: number,
+  opts  : { ivaPorcentaje?: number; discriminaIva?: boolean } = {},
+): number {
   if (!margen || margen <= 0) return 0
-  return Math.round(costo * (1 + margen) * 100) / 100
+  const costoReal = opts.discriminaIva
+    ? costo * (1 + (opts.ivaPorcentaje ?? 0) / 100)
+    : costo
+  return redondearA100(costoReal * (1 + margen))
+}
+
+/**
+ * Precio del blister (producto padre) a partir del precio de la unidad.
+ * Vendido cerrado se bonifica: `DESCUENTO_BLISTER` sobre el precio suelto.
+ *
+ * NO se redondea a 100: el redondeo vive en la UNIDAD, que es lo que se vende
+ * al público y tiene que tener un precio prolijo en la góndola. Redondear
+ * también acá multiplicaría ese ajuste por la cantidad de unidades (redondear
+ * $457 a $500 en un blister de 45 son $1.500 de más). El blister queda al peso.
+ */
+export function calcPrecioBlister(
+  precioUnidad       : number,
+  unidadesPorBlister : number,
+  descuento          : number = DESCUENTO_BLISTER,
+): number {
+  if (precioUnidad <= 0 || unidadesPorBlister <= 0) return 0
+  return Math.round(precioUnidad * unidadesPorBlister * (1 - descuento))
 }
 
 /**
