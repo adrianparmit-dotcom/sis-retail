@@ -25,8 +25,9 @@ import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorTo
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
 import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
-import { tipoComprobanteDux, discriminaIva, type LetraComprobante } from '@/lib/dux-compra'
+import { tipoComprobanteDux, nroComprobanteDux, discriminaIva, type LetraComprobante } from '@/lib/dux-compra'
 import { hoyISO } from '@/lib/format'
+import { recibidoTotal, faltante as faltanteDe, sobrante as sobranteDe } from '@/lib/recepcion-cantidades'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
 import { normalizeText } from '@/lib/search'
 import { claveItemProveedor, construirIndiceAlias, mismoProveedor } from '@/lib/proveedores'
@@ -864,6 +865,24 @@ export default function RecepcionFacturaPage() {
       }
     }
 
+    /**
+     * El estado se recalcula al abrir en vez de leer el guardado: las
+     * recepciones cargadas antes del reparto entre sucursales quedaron con
+     * "faltante" grabado sobre renglones que se habían mandado al otro local.
+     * "Vencido al llegar" sí se respeta — eso lo marca una persona, no la
+     * cuenta de cantidades.
+     */
+    const estadoDesdeCantidades = (
+      row: { estado: string; cantidad_esperada: number; transferir_cantidad: number | null },
+      recibida: number,
+    ): InvoiceLineItem['estado_recepcion'] => {
+      if (row.estado === 'vencido_llegada') return 'vencido_llegada'
+      const total = recibida + (row.transferir_cantidad ?? 0)
+      if (total < row.cantidad_esperada) return 'faltante'
+      if (total > row.cantidad_esperada) return 'extra'
+      return 'ok'
+    }
+
     const reconstructed: InvoiceLineItem[] = dbItems.map(it => {
       const lotes = lotesByItemId.get(it.id) ?? []
       const cantidadRecibida = lotes.length > 0
@@ -887,7 +906,7 @@ export default function RecepcionFacturaPage() {
         producto_id_dux       : prod?.proveedor_id_dux ?? undefined,
         cantidad_recibida     : cantidadRecibida,
         fecha_vencimiento     : it.fecha_vencimiento ?? '',
-        estado_recepcion      : (it.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
+        estado_recepcion      : estadoDesdeCantidades(it, cantidadRecibida),
         es_blister            : /^BLISTER\s/i.test(it.nombre_producto ?? ''),
         unidades_por_blister  : it.unidades_por_blister ?? 1,
         transferir_cantidad   : it.transferir_cantidad ?? 0,
@@ -992,6 +1011,23 @@ export default function RecepcionFacturaPage() {
     }
     return { propio: base, pareja: null }
   }, [paresBlister, margenProveedor, letraComprobante])
+
+  /**
+   * Unidades que trae el blister de una línea, según el par cargado en
+   * productos. El campo `unidades_por_blister` del renglón queda como respaldo
+   * para las recepciones viejas: arrancaba en 1 y alguien lo tipeaba a mano,
+   * de ahí salían los "× 1 = 1" y algún "× 110".
+   */
+  const unidadesPorBlisterDe = useCallback((item: InvoiceLineItem): number | null => {
+    if (item.producto_id) {
+      const par = paresBlister.porBlister.get(item.producto_id)
+      if (par?.unidades) return par.unidades
+      const prod = paresBlister.porId.get(item.producto_id)
+      if (prod?.unidades_por_blister) return prod.unidades_por_blister
+    }
+    const propio = item.unidades_por_blister ?? 0
+    return propio > 1 ? propio : null
+  }, [paresBlister])
 
   /** Precios de la pareja de cada línea, sin repetir SKU. */
   const construirPreciosBlister = useCallback((lineas: InvoiceLineItem[]) => {
@@ -1263,8 +1299,12 @@ export default function RecepcionFacturaPage() {
     setItems(prev => {
       const next = [...prev]
       const merged = { ...next[idx], ...patch }
-      if (patch.cantidad_recibida !== undefined || patch.fecha_vencimiento !== undefined) {
-        const qty = merged.cantidad_recibida
+      // Lo repartido a la otra sucursal también llegó: cuenta para saber si
+      // falta algo. Antes marcaba "faltante" todo lo que se mandaba al otro
+      // local y el reclamo al proveedor salía con renglones inventados.
+      if (patch.cantidad_recibida !== undefined || patch.transferir_cantidad !== undefined
+          || patch.fecha_vencimiento !== undefined) {
+        const qty = recibidoTotal(merged)
         const exp = merged.cantidad
         const fv  = merged.fecha_vencimiento
         let estado = merged.estado_recepcion
@@ -1600,12 +1640,17 @@ export default function RecepcionFacturaPage() {
       }).eq('id', recId)
 
       // Alta o suma de un vencimiento. Se repetía en tres lugares.
-      const sumarVencimiento = async (productoId: string, fecha: string, cantidad: number) => {
+      // `sucId` importa: lo que se reparte a la otra sucursal vence allá, no
+      // acá. Antes todo se cargaba en la sucursal que recibía y las unidades
+      // transferidas se quedaban sin vencimiento en ningún lado.
+      const sumarVencimiento = async (
+        productoId: string, fecha: string, cantidad: number, sucId: string,
+      ) => {
         if (!fecha || cantidad <= 0) return
         const { data: existing } = await supabase.from('vencimientos')
           .select('id,cantidad')
           .eq('producto_id', productoId)
-          .eq('sucursal_id', sucursalId)
+          .eq('sucursal_id', sucId)
           .eq('fecha_vencimiento', fecha)
           .maybeSingle()
         if (existing) {
@@ -1616,13 +1661,35 @@ export default function RecepcionFacturaPage() {
         } else {
           await supabase.from('vencimientos').insert({
             producto_id      : productoId,
-            sucursal_id      : sucursalId,
+            sucursal_id      : sucId,
             fecha_vencimiento: fecha,
             cantidad         : cantidad,
             origen           : 'recepcion_factura',
             recepcion_id     : recId,
           })
         }
+      }
+
+      /**
+       * Reparte una cantidad entre la sucursal que recibe y la que se lleva su
+       * parte, en proporción a lo cargado en el renglón. Con multi-lote no hay
+       * forma de saber de qué lote sale cada unidad transferida, así que se
+       * prorratea y el redondeo queda del lado de la sucursal que recibe.
+       */
+      const repartirVencimiento = async (
+        item: InvoiceLineItem, fecha: string, cantidad: number,
+      ) => {
+        if (!item.producto_id || cantidad <= 0) return
+        const total = recibidoTotal(item)
+        const aPartir = destinoSucursal ? (item.transferir_cantidad ?? 0) : 0
+        if (aPartir <= 0 || total <= 0) {
+          await sumarVencimiento(item.producto_id, fecha, cantidad, sucursalId)
+          return
+        }
+        const paraDestino = Math.round(cantidad * (aPartir / total))
+        const paraOrigen  = cantidad - paraDestino
+        await sumarVencimiento(item.producto_id, fecha, paraOrigen, sucursalId)
+        await sumarVencimiento(item.producto_id, fecha, paraDestino, destinoSucursal!.id)
       }
 
       // ── 2. Crear vencimientos (los items y sus lotes ya estan en DB) ──
@@ -1637,13 +1704,13 @@ export default function RecepcionFacturaPage() {
         if (item.lotes.length > 0) {
           for (const l of item.lotes) {
             if (!l.fecha_vencimiento || l.cantidad <= 0) continue
-            await sumarVencimiento(item.producto_id, l.fecha_vencimiento, l.cantidad)
+            await repartirVencimiento(item, l.fecha_vencimiento, l.cantidad)
           }
           continue
         }
         // Un solo lote.
         if (item.fecha_vencimiento) {
-          await sumarVencimiento(item.producto_id, item.fecha_vencimiento, item.cantidad_recibida)
+          await repartirVencimiento(item, item.fecha_vencimiento, recibidoTotal(item))
         }
       }
 
@@ -1726,7 +1793,8 @@ export default function RecepcionFacturaPage() {
           cantidad : i.cantidad,
           costo    : i.costo_unitario,
           iva      : i.iva_porcentaje,
-          recibida : i.cantidad_recibida,
+          // Lo que realmente entró: incluye lo que se reparte al otro local.
+          recibida : recibidoTotal(i),
         }))
 
       // Resolve id_proveedor for the Dux purchase:
@@ -1776,7 +1844,7 @@ export default function RecepcionFacturaPage() {
           id_proveedor    : provId,
           id_deposito     : sucursal.dux_deposito,
           fecha           : fechaISO,
-          nro_comprobante : factura.nro_comprobante || 'S/N',
+          nro_comprobante : nroComprobanteDux(factura.nro_comprobante ?? '', letraComprobante) || 'S/N',
           // Dux nombra el comprobante completo: "FACTURA A". Con la letra sola
           // responde 400 "Comprobante no reconocido".
           tipo_comprobante: tipoComprobanteDux(letraComprobante),
@@ -1839,13 +1907,18 @@ export default function RecepcionFacturaPage() {
       }
 
       // ── 6. Report ────────────────────────────────────────────
-      const ok          = items.filter(i => i.estado_recepcion === 'ok').length
-      const faltante    = items.filter(i => i.estado_recepcion === 'faltante').length
-      const extra       = items.filter(i => i.estado_recepcion === 'extra').length
+      // Faltantes y extras se miden acá y no por el estado guardado: el estado
+      // se calculó cuando se tipeó la cantidad, y las recepciones cargadas antes
+      // del reparto quedaron con "faltante" grabado sobre renglones que en
+      // realidad se habían mandado al otro local.
+      const vivos       = items.filter(i => i.estado_recepcion !== 'vencido_llegada')
+      const faltante    = vivos.filter(i => faltanteDe(i) > 0).length
+      const extra       = vivos.filter(i => sobranteDe(i) > 0).length
+      const ok          = vivos.length - faltante - extra
       const vencLlegada = items.filter(i => i.estado_recepcion === 'vencido_llegada').length
       const sinMatch    = items.filter(i => !i.producto_id).length
       const granel      = items.filter(i => i.es_granel)
-      const blisters    = items.filter(i => i.es_blister && !i.es_granel && i.cantidad_recibida > 0)
+      const blisters    = items.filter(i => i.es_blister && !i.es_granel && recibidoTotal(i) > 0)
 
       const lines = [
         `INFORME DE RECEPCIÓN — ${factura.proveedor_nombre}`,
@@ -1859,17 +1932,18 @@ export default function RecepcionFacturaPage() {
       // aunque parte de la mercadería se fuera a la otra, y el que lo leía no
       // tenía forma de saber cuánto quedaba realmente en cada lado.
       if (itemsATransferir.length > 0 && destinoSucursal) {
-        const totalRecibido = items.reduce((s, i) => s + (i.cantidad_recibida ?? 0), 0)
-        const totalAPartir  = itemsATransferir.reduce((s, i) => s + (i.transferir_cantidad ?? 0), 0)
+        const totalEntrado = items.reduce((s, i) => s + recibidoTotal(i), 0)
+        const totalAPartir = itemsATransferir.reduce((s, i) => s + (i.transferir_cantidad ?? 0), 0)
+        const totalFacturado = items.reduce((s, i) => s + i.cantidad, 0)
         lines.push(
           '',
-          `📦 REPARTO POR SUCURSAL (${totalRecibido} unidades recibidas):`,
-          `  · ${sucursal.nombre}: ${totalRecibido - totalAPartir} unidades`,
+          `📦 REPARTO POR SUCURSAL (${totalEntrado} de ${totalFacturado} unidades facturadas):`,
+          `  · ${sucursal.nombre}: ${totalEntrado - totalAPartir} unidades`,
           `  · ${destinoSucursal.nombre}: ${totalAPartir} unidades (${itemsATransferir.length} productos) — transferencia pendiente de cargar en Dux`,
           '',
           `  Detalle de lo que se parte a ${destinoSucursal.nombre}:`,
           ...itemsATransferir.map(i =>
-            `    · ${i.producto_sku ?? i.sku_proveedor}  ${i.producto_nombre ?? i.descripcion_proveedor} — ${i.transferir_cantidad} de ${i.cantidad_recibida}`
+            `    · ${i.producto_sku ?? i.sku_proveedor}  ${i.producto_nombre ?? i.descripcion_proveedor} — ${i.transferir_cantidad} de ${recibidoTotal(i)}`
           ),
         )
       }
@@ -1879,8 +1953,14 @@ export default function RecepcionFacturaPage() {
         lines.push('  → Actualizá las cantidades en el borrador a medida que fraccionás')
       }
       if (blisters.length) {
-        lines.push('', `🔷 BLISTERS A FRACCIONAR (${blisters.length}):`)
-        blisters.forEach(i => lines.push(`  · ${i.producto_nombre ?? i.descripcion_proveedor} — ${i.cantidad_recibida} cajas × ${i.unidades_por_blister} ud`))
+        // No van a fraccionamiento: Dux descuenta la unidad del blister sola.
+        // Esto es solo la equivalencia en unidades sueltas de lo que entró.
+        lines.push('', `🔷 BLISTERS RECIBIDOS (${blisters.length}) — Dux descuenta las unidades solo:`)
+        blisters.forEach(i => {
+          const n = unidadesPorBlisterDe(i)
+          lines.push(`  · ${i.producto_nombre ?? i.descripcion_proveedor} — ${recibidoTotal(i)} cajas`
+            + (n ? ` × ${n} = ${recibidoTotal(i) * n} und` : ' (falta cargar las unidades por blister)'))
+        })
       }
       if (priceItems.length) lines.push('', `💰 PRECIOS A ACTUALIZAR EN DUX: ${priceItems.length} productos`)
 
@@ -1904,7 +1984,7 @@ export default function RecepcionFacturaPage() {
     }
     // createBorradorFromParsed is intentionally not declared as a dep (stable at runtime)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [factura, items, sucursalId, texto, borradorId, margenProveedor, flushPendingSaves, destinoSucursal, letraComprobante, construirPreciosBlister])
+  }, [factura, items, sucursalId, texto, borradorId, margenProveedor, flushPendingSaves, destinoSucursal, letraComprobante, construirPreciosBlister, unidadesPorBlisterDe])
 
   // ── Stats ─────────────────────────────────────────────────────
 
@@ -1930,7 +2010,14 @@ export default function RecepcionFacturaPage() {
   // ── Computed derived values ───────────────────────────────────
 
   const granelItems   = useMemo(() => items.filter(i => i.es_granel),   [items])
-  const blisterItems  = useMemo(() => items.filter(i => i.es_blister && !i.es_granel && i.cantidad_recibida > 0), [items])
+  const blisterItems  = useMemo(() => items.filter(i => i.es_blister && !i.es_granel && recibidoTotal(i) > 0), [items])
+
+
+  /** Total de unidades sueltas que representan los blisters recibidos. */
+  const unidadesDeBlisters = useMemo(
+    () => blisterItems.reduce((s, b) => s + recibidoTotal(b) * (unidadesPorBlisterDe(b) ?? 0), 0),
+    [blisterItems, unidadesPorBlisterDe],
+  )
 
   // ─────────────────────────────────────────────────────────────
   // RENDER
@@ -2212,7 +2299,12 @@ export default function RecepcionFacturaPage() {
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500">Descripción factura</th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-zinc-500">Producto sistema</th>
                   <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-14">Fact.</th>
-                  <th className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-20">Recibido</th>
+                  {/* Con reparto activo, "Recibido" es solo lo que se queda acá:
+                      lo que va al otro local se carga en la columna de al lado. */}
+                  <th
+                    className="text-right px-2 py-2 text-xs font-medium text-zinc-500 w-20"
+                    title={destinoSucursal ? `Unidades que quedan en ${SUCURSALES.find(x => x.id === sucursalId)?.nombre}` : undefined}
+                  >{destinoSucursal ? `Queda en ${etiquetaCorta(SUCURSALES.find(x => x.id === sucursalId)?.nombre ?? "")}` : "Recibido"}</th>
                   {destinoSucursal && (
                     <th className="text-right px-2 py-2 text-xs font-medium text-indigo-500 w-16" title={`Unidades a transferir a ${destinoSucursal.nombre}`}>
                       → {etiquetaCorta(destinoSucursal.nombre)}
@@ -2323,7 +2415,7 @@ export default function RecepcionFacturaPage() {
                           {item.producto_id && !item.es_granel ? (
                             <input
                               type="number" min="0"
-                              max={item.cantidad_recibida}
+                              max={Math.max(0, item.cantidad - item.cantidad_recibida)}
                               value={item.transferir_cantidad ?? 0}
                               onChange={e => updateItem(i, { transferir_cantidad: parseInt(e.target.value) || 0 })}
                               className="w-14 text-right border border-indigo-200 rounded px-1 py-1 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-indigo-50"
@@ -2592,17 +2684,34 @@ export default function RecepcionFacturaPage() {
           </div>
         )}
 
-        {/* Blister queue */}
+        {/* Blisters recibidos.
+            NO hay nada que fraccionar: en Dux el blister es el producto simple
+            que tiene el stock y la unidad es el compuesto que le descuenta al
+            venderse, así que el ERP reparte solo. Esto queda como referencia de
+            a cuántas unidades sueltas equivale lo que entró, y el vencimiento
+            se carga sobre el blister, que es el que tiene stock. */}
         {blisterItems.length > 0 && (
           <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-            <p className="text-sm font-semibold text-blue-800 mb-1">🔷 {blisterItems.length} blisters para fraccionar</p>
+            <p className="text-sm font-semibold text-blue-800 mb-1">
+              🔷 {blisterItems.length} blisters recibidos — equivalen a {unidadesDeBlisters} unidades sueltas
+            </p>
+            <p className="text-xs text-blue-700 mb-2">
+              No hay que fraccionarlos: Dux descuenta la unidad del blister sola al venderla.
+              El vencimiento va cargado sobre el blister.
+            </p>
             <ul className="space-y-1 text-xs text-blue-800 mb-3">
-              {blisterItems.map((b, i) => (
-                <li key={i}>· {b.producto_nombre ?? b.descripcion_proveedor} — {b.cantidad_recibida} cajas × {b.unidades_por_blister} = {b.cantidad_recibida * b.unidades_por_blister} und</li>
-              ))}
+              {blisterItems.map((b, i) => {
+                const n = unidadesPorBlisterDe(b)
+                return (
+                  <li key={i}>
+                    · {b.producto_nombre ?? b.descripcion_proveedor} — {recibidoTotal(b)} cajas
+                    {n ? ` × ${n} = ${recibidoTotal(b) * n} und` : ' — falta cargar las unidades por blister'}
+                  </li>
+                )
+              })}
             </ul>
-            <Link href="/fraccionamiento">
-              <Button size="sm" variant="outline">Ir a Fraccionamiento →</Button>
+            <Link href="/precios/blisters">
+              <Button size="sm" variant="outline">Revisar blisters y unidades →</Button>
             </Link>
           </div>
         )}

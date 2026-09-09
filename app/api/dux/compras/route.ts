@@ -71,6 +71,9 @@ function normalizarNroComprobante(raw: string, tipoComprobante: string): string 
   const partes = /^(\d{1,5})-(\d{1,8})$/.exec(cuerpo)
   if (!partes) return limpio
 
+  // Dux nombra el tipo "FACTURA" a secas, así que la letra ya no se puede
+  // sacar de ahí: viene en el número que arma nroComprobanteDux(). El match
+  // contra "FACTURA A" queda como respaldo para payloads viejos.
   const letra = conLetra?.[1] ?? /^FACTURA ([ABCEM])$/.exec(tipoComprobante)?.[1]
   const numero = `${partes[1].padStart(5, '0')}-${partes[2].padStart(8, '0')}`
   return letra ? `${letra}-${numero}` : numero

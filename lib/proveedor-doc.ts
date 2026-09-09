@@ -1,4 +1,5 @@
 import type { InvoiceLineItem } from './types'
+import { recibidoTotal, faltante, sobrante } from './recepcion-cantidades'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -48,7 +49,7 @@ export function buildDocumentoProveedor(
 
     // 1. Vencidos al llegar
     if (item.estado_recepcion === 'vencido_llegada') {
-      const qty = item.cantidad_recibida > 0 ? item.cantidad_recibida : item.cantidad
+      const qty = recibidoTotal(item) > 0 ? recibidoTotal(item) : item.cantidad
       vencidos.push({
         sku, nombre,
         cantidad_esperada : item.cantidad,
@@ -83,23 +84,25 @@ export function buildDocumentoProveedor(
       }
     }
 
-    // 3. Faltantes
-    if (item.cantidad_recibida < item.cantidad) {
+    // 3. Faltantes. Se mide contra TODO lo que entró (lo que queda acá más lo
+    // que se repartió al otro local): si no, el reclamo al proveedor sale con
+    // renglones que nunca faltaron.
+    if (faltante(item) > 0) {
       faltantes.push({
         sku, nombre,
         cantidad_esperada : item.cantidad,
-        cantidad_recibida : item.cantidad_recibida,
-        diferencia        : item.cantidad - item.cantidad_recibida,
+        cantidad_recibida : recibidoTotal(item),
+        diferencia        : faltante(item),
       })
     }
 
     // 4. Sobrantes
-    if (item.cantidad_recibida > item.cantidad) {
+    if (sobrante(item) > 0) {
       sobrantes.push({
         sku, nombre,
         cantidad_esperada : item.cantidad,
-        cantidad_recibida : item.cantidad_recibida,
-        diferencia        : item.cantidad_recibida - item.cantidad,
+        cantidad_recibida : recibidoTotal(item),
+        diferencia        : sobrante(item),
       })
     }
   }

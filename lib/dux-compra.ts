@@ -20,15 +20,42 @@ export type LetraComprobante = 'A' | 'B' | 'C' | 'X'
 /**
  * Cómo nombra Dux cada comprobante al registrar la compra.
  *
- * Las facturas van con el nombre completo ("FACTURA A"): mandar la letra sola
- * devuelve 400 "Comprobante no reconocido".
+ * El tipo es `FACTURA` a secas, SIN la letra. Dux no tiene un tipo por letra:
+ * la letra viaja adentro del número (ver `nroComprobanteDux`). Mandar
+ * "FACTURA A" devuelve 400 "Comprobante no reconocido" — es lo que venía
+ * haciendo la app y por lo que ninguna compra llegó nunca al ERP.
+ *
+ * Comprobado sobre las 200 compras reales de la empresa 4065: los únicos
+ * tipos que existen son FACTURA (14), COMPROBANTE_COMPRA (185) y
+ * NOTA_CREDITO (1).
  *
  * Los documentos X —remitos y comprobantes internos que no se envían a AFIP—
  * no son facturas: en Dux figuran como COMPROBANTE_COMPRA, que es el tipo con
- * el que ya se cargan a mano hoy (74 de las últimas 80 compras del ERP).
+ * el que ya se cargan a mano hoy.
  */
 export function tipoComprobanteDux(letra: LetraComprobante): string {
-  return letra === 'X' ? 'COMPROBANTE_COMPRA' : `FACTURA ${letra}`
+  return letra === 'X' ? 'COMPROBANTE_COMPRA' : 'FACTURA'
+}
+
+/**
+ * Número de comprobante en el formato del ERP: `LETRA-PPPPP-NNNNNNNN`.
+ *
+ * Dux no tiene un tipo por letra: guarda `tipo_comp = "FACTURA"` y la letra
+ * viaja adentro del número. Verificado contra las 14 facturas reales del ERP
+ * (A-00001-00005118, A-00007-00014797, …). Mandar la letra en el tipo devuelve
+ * 400 "Comprobante no reconocido".
+ */
+export function nroComprobanteDux(nro: string, letra: LetraComprobante): string {
+  const limpio = (nro ?? '').trim().replace(/\s+/g, '')
+  // Si ya viene con letra adelante, se respeta la que trae.
+  const conLetra = /^([ABCEM])-?(\d.*)$/.exec(limpio)
+  const cuerpo   = conLetra ? conLetra[2] : limpio
+  const partes   = /^(\d{1,5})-(\d{1,8})$/.exec(cuerpo)
+  if (!partes) return limpio
+  const numero = `${partes[1].padStart(5, '0')}-${partes[2].padStart(8, '0')}`
+  // Los documentos X no son fiscales y no llevan letra.
+  const letraFinal = conLetra?.[1] ?? (letra === 'X' ? null : letra)
+  return letraFinal ? `${letraFinal}-${numero}` : numero
 }
 
 /**
@@ -178,7 +205,7 @@ export async function reenviarCompraADux(
     id_proveedor    : provId,
     id_deposito     : sucursal.dux_deposito,
     fecha           : rec.fecha_factura,
-    nro_comprobante : rec.numero_comprobante || 'S/N',
+    nro_comprobante : nroComprobanteDux(rec.numero_comprobante ?? '', letraFinal) || 'S/N',
     tipo_comprobante: tipoComprobanteDux(letraFinal),
     productos: lineas.map(i => ({
       id_item          : i.sku!,
