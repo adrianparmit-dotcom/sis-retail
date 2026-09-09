@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { AlertCircle, Trash2 } from 'lucide-react'
+import { AlertCircle, Trash2, MoveRight } from 'lucide-react'
 
 const ESTADO_CONFIG: Record<string, { label: string; className: string }> = {
   borrador   : { label: 'Borrador',   className: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
@@ -65,6 +65,8 @@ export default function RecepcionesPage() {
   const [borrando, setBorrando] = useState(false)
   const [etapas, setEtapas] = useState<Map<string, EtapaBorrador>>(new Map())
   const [reintentando, setReintentando] = useState<string | null>(null)
+  // recepcion_id -> unidades transferidas a otra sucursal.
+  const [transferidas, setTransferidas] = useState<Map<string, number>>(new Map())
 
   useEffect(() => {
     const cargar = async () => {
@@ -75,6 +77,19 @@ export default function RecepcionesPage() {
       const filas = (data ?? []) as RecepcionConItems[]
       setData(filas)
       setLoading(false)
+
+      // Qué recepciones se repartieron a otra sucursal. Se marca en la lista
+      // para que no haya que entrar a cada una para enterarse.
+      const { data: transfRows } = await supabase.from('transferencias_recepcion')
+        .select('recepcion_id, transferencias_recepcion_items(cantidad)')
+      const unidadesPorRec = new Map<string, number>()
+      type TransfRow = { recepcion_id: string | null; transferencias_recepcion_items: { cantidad: number }[] }
+      for (const t of (transfRows ?? []) as TransfRow[]) {
+        if (!t.recepcion_id) continue
+        const total = (t.transferencias_recepcion_items ?? []).reduce((s2, i) => s2 + Number(i.cantidad), 0)
+        if (total > 0) unidadesPorRec.set(t.recepcion_id, (unidadesPorRec.get(t.recepcion_id) ?? 0) + total)
+      }
+      setTransferidas(unidadesPorRec)
 
       // Para los borradores, mirar sus ítems y decir en qué etapa quedaron.
       // Antes todos decían lo mismo ("pendiente de completar") y había que
@@ -250,7 +265,19 @@ export default function RecepcionesPage() {
                 const cfg = ESTADO_CONFIG[r.estado] ?? ESTADO_CONFIG.pendiente
                 return (
                   <TableRow key={r.id} className="hover:bg-zinc-50">
-                    <TableCell className="font-mono text-sm">{r.numero_comprobante ?? r.dux_compra_id ?? '—'}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {r.numero_comprobante ?? r.dux_compra_id ?? '—'}
+                      {/* Deja ver de un vistazo que esa recepción se repartió,
+                          sin tener que entrar a cada una. */}
+                      {transferidas.has(r.id) && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-0.5 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 align-middle"
+                          title={`Se transfirieron ${transferidas.get(r.id)} unidades a otra sucursal`}
+                        >
+                          <MoveRight size={10} /> {transferidas.get(r.id)} ud
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm">{r.proveedor_nombre ?? '—'}</TableCell>
                     <TableCell className="text-sm tabular-nums">{fmtFecha(r.fecha_factura)}</TableCell>
                     <TableCell className="text-sm tabular-nums">{fmtFecha(r.fecha_recepcion)}</TableCell>

@@ -107,6 +107,8 @@ export interface RecepcionItem {
   nombre_producto: string | null
   cantidad_esperada: number
   cantidad_recibida: number | null
+  /** Unidades de este renglón que se repartieron a la otra sucursal. */
+  transferir_cantidad: number | null
   fecha_vencimiento: string | null
   estado: string
   observacion: string | null
