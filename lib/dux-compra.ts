@@ -84,6 +84,7 @@ interface RecepcionRow {
 }
 
 interface ItemRow {
+  id: string
   producto_id: string | null
   sku: string | null
   es_granel: boolean | null
@@ -91,6 +92,25 @@ interface ItemRow {
   cantidad_recibida: number | null
   costo_unitario: number | null
   iva_porcentaje: number | null
+}
+
+/** Una línea ya lista para el payload de Dux. */
+interface LineaDux {
+  id_item          : string
+  cantidad         : number
+  precio_unitario  : number
+  iva_porcentaje   : number
+  cantidad_recibida: number
+}
+
+/**
+ * Gramos que trae una unidad vendida. `unidad_medida` numérico = gramos;
+ * `'kg'` = 1000. Mismo criterio que usa Fraccionamiento para el progreso.
+ */
+function gramosPorUnidad(unidad: string | null): number {
+  if (!unidad) return 0
+  if (unidad.trim().toLowerCase() === 'kg') return 1000
+  return Number(unidad) || 0
 }
 
 /** Deja constancia del intento en la recepción, igual que la pantalla de carga. */

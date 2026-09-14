@@ -5,12 +5,13 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { reenviarCompraADux } from '@/lib/dux-compra'
+import { contarPendientesPorRecepcion, enviarPreciosPendientes } from '@/lib/precios-pendientes'
 import type { Recepcion } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { AlertCircle, Trash2, MoveRight } from 'lucide-react'
+import { AlertCircle, Trash2, MoveRight, Wallet } from 'lucide-react'
 
 const ESTADO_CONFIG: Record<string, { label: string; className: string }> = {
   borrador   : { label: 'Borrador',   className: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
@@ -67,6 +68,9 @@ export default function RecepcionesPage() {
   const [reintentando, setReintentando] = useState<string | null>(null)
   // recepcion_id -> unidades transferidas a otra sucursal.
   const [transferidas, setTransferidas] = useState<Map<string, number>>(new Map())
+  // recepcion_id -> precios calculados que todavía no se mandaron a Dux.
+  const [preciosPend, setPreciosPend] = useState<Map<string, number>>(new Map())
+  const [enviandoPrecios, setEnviandoPrecios] = useState<string | null>(null)
 
   useEffect(() => {
     const cargar = async () => {
@@ -90,6 +94,8 @@ export default function RecepcionesPage() {
         if (total > 0) unidadesPorRec.set(t.recepcion_id, (unidadesPorRec.get(t.recepcion_id) ?? 0) + total)
       }
       setTransferidas(unidadesPorRec)
+
+      setPreciosPend(await contarPendientesPorRecepcion())
 
       // Para los borradores, mirar sus ítems y decir en qué etapa quedaron.
       // Antes todos decían lo mismo ("pendiente de completar") y había que
@@ -155,8 +161,41 @@ export default function RecepcionesPage() {
     }
   }
 
+  /**
+   * Manda los precios que quedaron colgados de una recepción ya confirmada.
+   *
+   * Existe porque el botón de la pantalla de confirmación es fácil de saltear:
+   * vive en una pantalla que se ve una sola vez y, si nadie lo apretaba, los
+   * precios nuevos no llegaban nunca a la góndola y no quedaba registro.
+   */
+  async function enviarPrecios(r: RecepcionConItems) {
+    setEnviandoPrecios(r.id)
+    const res = await enviarPreciosPendientes(r.id)
+    setEnviandoPrecios(null)
+
+    if (!res.ok) {
+      toast.error(res.motivo, { duration: 8000 })
+      return
+    }
+    setPreciosPend(prev => {
+      const next = new Map(prev)
+      next.delete(r.id)
+      return next
+    })
+    const n = res.enviados
+    toast.success(
+      `${n} precio${n === 1 ? '' : 's'} enviado${n === 1 ? '' : 's'} a Dux` +
+      `${res.idProceso ? ` — proceso ${res.idProceso}` : ''}. Dux ${n === 1 ? 'lo aplica' : 'los aplica'} en unos minutos.`,
+      { duration: 8000 },
+    )
+  }
+
   const borradores   = useMemo(() => data.filter(r => r.estado === 'borrador'),   [data])
   const confirmadas  = useMemo(() => data.filter(r => r.estado !== 'borrador'),   [data])
+  const conPrecios   = useMemo(
+    () => confirmadas.filter(r => (preciosPend.get(r.id) ?? 0) > 0),
+    [confirmadas, preciosPend],
+  )
 
   return (
     <div className="p-6 space-y-6">
@@ -226,6 +265,57 @@ export default function RecepcionesPage() {
                     aria-label={`Descartar borrador de ${r.proveedor_nombre ?? 'sin proveedor'}`}
                   >
                     <Trash2 size={14} />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Precios calculados sin mandar a Dux ────────────────── */}
+      {!loading && conPrecios.length > 0 && (
+        <div className="rounded-xl border-2 border-amber-300 bg-amber-50 overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 bg-amber-100 border-b border-amber-200">
+            <Wallet size={16} className="text-amber-600 shrink-0" />
+            <span className="text-sm font-semibold text-amber-800">
+              {conPrecios.length} recepción{conPrecios.length > 1 ? 'es' : ''} con precios sin actualizar en Dux
+            </span>
+            <span className="text-xs text-amber-600 ml-1">
+              (La mercadería ya entró, pero la góndola sigue con el precio viejo)
+            </span>
+          </div>
+          <div className="divide-y divide-amber-200">
+            {conPrecios.map(r => (
+              <div key={r.id} className="flex items-center gap-4 px-4 py-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3">
+                    <span className="font-medium text-sm text-zinc-800 line-clamp-2 leading-snug">
+                      {r.proveedor_nombre ?? '—'}
+                    </span>
+                    <span className="font-mono text-xs text-zinc-500 shrink-0">
+                      {r.numero_comprobante ?? r.dux_compra_id ?? 'S/N'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-zinc-500 mt-0.5">
+                    Recibido: {fmtFecha(r.fecha_recepcion)} · {preciosPend.get(r.id)} precio
+                    {preciosPend.get(r.id) === 1 ? '' : 's'} para actualizar
+                  </div>
+                  <div className="text-xs font-medium mt-1 text-amber-700">
+                    Se actualiza la lista CONSUMIDOR FINAL
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Link href={`/recepciones/factura?borrador=${r.id}`}>
+                    <Button size="sm" variant="outline">Revisar</Button>
+                  </Link>
+                  <Button
+                    size="sm"
+                    className="bg-amber-600 hover:bg-amber-700 text-white"
+                    disabled={enviandoPrecios === r.id}
+                    onClick={() => enviarPrecios(r)}
+                  >
+                    {enviandoPrecios === r.id ? 'Enviando...' : '💰 Enviar precios'}
                   </Button>
                 </div>
               </div>

@@ -24,6 +24,7 @@ import { parseFactura, calcPrecioVenta, calcPrecioBlister, detectProveedorType }
 import { buildDocumentoProveedor, documentoProveedorToText, documentoProveedorToPDF, type DocumentoProveedor } from '@/lib/proveedor-doc'
 import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, SkuMapEntry, GranelDerivado, Lote } from '@/lib/types'
 import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
+import { registrarPreciosPendientes, marcarExportados } from '@/lib/precios-pendientes'
 import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
 import { tipoComprobanteDux, nroComprobanteDux, discriminaIva, type LetraComprobante } from '@/lib/dux-compra'
 import { hoyISO } from '@/lib/format'
@@ -72,6 +73,19 @@ interface Producto {
   // Vínculo blister ↔ unidad: en la fila de la UNIDAD apunta a su blister.
   blister_producto_id : string | null
   unidades_por_blister: number | null
+}
+
+/**
+ * El SKU acompañante que se actualiza junto con el de la línea (blister ↔
+ * unidad). Lleva `producto_id` y `precio_anterior` porque el precio derivado
+ * también se registra en `precios_pendientes`, y ahí hace falta saber sobre qué
+ * producto cae y de cuánto venía.
+ */
+type PrecioPareja = {
+  codigo         : string
+  importe        : number
+  producto_id    : string
+  precio_anterior: number | null
 }
 
 type Step = 'paste' | 'review' | 'done'
@@ -772,7 +786,7 @@ export default function RecepcionFacturaPage() {
     const rec = recRes.data as {
       proveedor_nombre: string | null; nro_comprobante?: string | null; numero_comprobante?: string | null
       fecha_factura: string | null; sucursal_id: string | null; texto_original: string | null
-      sucursal_destino_id?: string | null
+      sucursal_destino_id?: string | null; comprobante_letra?: string | null
     }
 
     const inv: ParsedFactura = {
@@ -918,6 +932,11 @@ export default function RecepcionFacturaPage() {
 
     setSucursalId(rec.sucursal_id ?? SUCURSALES[0].id)
     setDestinoId(rec.sucursal_destino_id ?? null)
+    // La letra guardada manda. Sin esto el selector volvía a 'A' al abrir el
+    // borrador y un remito X terminaba en Dux como FACTURA A-<nro de remito>.
+    if (rec.comprobante_letra && ['A', 'B', 'C', 'X'].includes(rec.comprobante_letra)) {
+      setLetraComprobante(rec.comprobante_letra as LetraComprobante)
+    }
     setTexto(rec.texto_original ?? '')
     setFactura(inv)
     setItems(reconstructed)
@@ -985,7 +1004,7 @@ export default function RecepcionFacturaPage() {
    */
   const preciosDeLinea = useCallback((item: InvoiceLineItem): {
     propio: number
-    pareja: { codigo: string; importe: number } | null
+    pareja: PrecioPareja | null
   } => {
     const opts = { ivaPorcentaje: item.iva_porcentaje, discriminaIva: discriminaIva(letraComprobante) }
     const base = calcPrecioVenta(item.costo_unitario, margenProveedor, opts)
@@ -996,7 +1015,12 @@ export default function RecepcionFacturaPage() {
       const precioUnidad = calcPrecioVenta(item.costo_unitario / comoBlister.unidades, margenProveedor, opts)
       return {
         propio: calcPrecioBlister(precioUnidad, comoBlister.unidades),
-        pareja: precioUnidad > 0 ? { codigo: comoBlister.unidad.sku, importe: precioUnidad } : null,
+        pareja: precioUnidad > 0 ? {
+          codigo         : comoBlister.unidad.sku,
+          importe        : precioUnidad,
+          producto_id    : comoBlister.unidad.id,
+          precio_anterior: comoBlister.unidad.precio_venta,
+        } : null,
       }
     }
 
@@ -1006,7 +1030,12 @@ export default function RecepcionFacturaPage() {
       const precioBlister = calcPrecioBlister(base, prod.unidades_por_blister)
       return {
         propio: base,
-        pareja: blister && precioBlister > 0 ? { codigo: blister.sku, importe: precioBlister } : null,
+        pareja: blister && precioBlister > 0 ? {
+          codigo         : blister.sku,
+          importe        : precioBlister,
+          producto_id    : blister.id,
+          precio_anterior: blister.precio_venta,
+        } : null,
       }
     }
     return { propio: base, pareja: null }
@@ -1031,7 +1060,7 @@ export default function RecepcionFacturaPage() {
 
   /** Precios de la pareja de cada línea, sin repetir SKU. */
   const construirPreciosBlister = useCallback((lineas: InvoiceLineItem[]) => {
-    const salida: { codigo: string; importe: number }[] = []
+    const salida: PrecioPareja[] = []
     const yaPuesto = new Set<string>()
     for (const linea of lineas) {
       const { pareja } = preciosDeLinea(linea)
@@ -1509,6 +1538,8 @@ export default function RecepcionFacturaPage() {
       } else {
         setPreciosEnviados(true)
         setPreciosProcesoId((data.id_proceso as string) ?? null)
+        // Baja el aviso de /recepciones: estos precios ya salieron.
+        if (borradorId) await marcarExportados(borradorId)
         toast.success(`${data.enviados} precios enviados a Dux`)
       }
     } catch {
@@ -1566,6 +1597,22 @@ export default function RecepcionFacturaPage() {
       toast.error(
         `${sinProducto.length} ${sinProducto.length === 1 ? 'ítem tiene' : 'ítems tienen'} fecha de vencimiento pero no tienen producto asignado: ${detalle}${resto}. ` +
         'Asignales el producto o borrales la fecha — si confirmás así, esa fecha se pierde.',
+        { duration: 10000 },
+      )
+      return
+    }
+
+    // Un bulto sin SKU final no puede entrar a Dux: la compra manda el producto
+    // fraccionado, no el bulto madre (que no existe en el ERP). Antes quedaba
+    // afuera en silencio y ese stock no existía para el sistema hasta que
+    // alguien lo cargaba a mano.
+    const granelSinDerivado = items.filter(i => i.es_granel && (i.derivados?.length ?? 0) === 0)
+    if (granelSinDerivado.length > 0) {
+      const detalle = granelSinDerivado.slice(0, 3).map(i => i.descripcion_proveedor).join(', ')
+      const resto = granelSinDerivado.length > 3 ? ` y ${granelSinDerivado.length - 3} más` : ''
+      toast.error(
+        `${granelSinDerivado.length} ${granelSinDerivado.length === 1 ? 'bulto no tiene' : 'bultos no tienen'} SKU final asignado: ${detalle}${resto}. ` +
+        'Abrí "Configurar derivados de granel" y elegí en qué producto se fracciona — sin eso ese stock no entra a Dux.',
         { duration: 10000 },
       )
       return
@@ -1889,8 +1936,30 @@ export default function RecepcionFacturaPage() {
       const preciosBlister = construirPreciosBlister(priceItems)
       const todosLosPrecios = [
         ...priceItems.map(i => ({ codigo: i.producto_sku!, importe: i.precio_venta_sugerido })),
-        ...preciosBlister,
+        ...preciosBlister.map(p => ({ codigo: p.codigo, importe: p.importe })),
       ]
+
+      // Se guardan ANTES de armar el Excel: el set de precios tiene que
+      // sobrevivir aunque nadie apriete el botón, se caiga la generación del
+      // Excel o se cierre la pestaña. De eso vive el aviso en /recepciones.
+      if (todosLosPrecios.length > 0) {
+        await registrarPreciosPendientes(recId, [
+          ...priceItems.map(i => ({
+            sku            : i.producto_sku!,
+            producto_id    : i.producto_id ?? null,
+            precio_anterior: i.producto_precio_actual ?? null,
+            precio_nuevo   : i.precio_venta_sugerido,
+            sku_disparador : i.sku_proveedor,
+          })),
+          ...preciosBlister.map(p => ({
+            sku            : p.codigo,
+            producto_id    : p.producto_id,
+            precio_anterior: p.precio_anterior,
+            precio_nuevo   : p.importe,
+            sku_disparador : null,
+          })),
+        ])
+      }
 
       if (todosLosPrecios.length > 0) {
         const res = await fetch('/api/dux/exportar-precios', {
