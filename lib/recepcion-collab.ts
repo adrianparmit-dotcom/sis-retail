@@ -46,6 +46,7 @@ export interface RecepcionItemRow {
   precio_venta_sugerido: number | null
   unidades_por_blister : number | null
   transferir_cantidad  : number | null
+  sin_factura          : boolean | null
   last_edited_by       : string | null
 }
 
@@ -94,6 +95,7 @@ function itemToRow(item: InvoiceLineItem, recepcionId: string): Omit<RecepcionIt
     precio_venta_sugerido : item.precio_venta_sugerido,
     unidades_por_blister  : item.unidades_por_blister,
     transferir_cantidad   : item.transferir_cantidad ?? 0,
+    sin_factura           : !!item.sin_factura,
     last_edited_by        : CLIENT_ID,
     updated_at            : new Date().toISOString(),
   }
@@ -131,6 +133,7 @@ export function rowToItem(
     estado_recepcion      : (row.estado as InvoiceLineItem['estado_recepcion']) ?? 'ok',
     es_blister            : /^BLISTER\s/i.test(row.nombre_producto ?? ''),
     transferir_cantidad   : row.transferir_cantidad ?? 0,
+    sin_factura           : !!row.sin_factura,
     es_granel             : !!row.es_granel,
     derivados             : row.es_granel ? derivs : undefined,
     lotes,

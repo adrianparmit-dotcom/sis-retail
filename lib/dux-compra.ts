@@ -81,6 +81,7 @@ interface RecepcionRow {
   numero_comprobante: string | null
   fecha_factura: string | null
   comprobante_letra: string | null
+  remito_numero: string | null
 }
 
 interface ItemRow {
@@ -92,6 +93,7 @@ interface ItemRow {
   cantidad_recibida: number | null
   costo_unitario: number | null
   iva_porcentaje: number | null
+  sin_factura: boolean | null
 }
 
 /** Una línea ya lista para el payload de Dux. */
@@ -173,7 +175,7 @@ export async function reenviarCompraADux(
   letra?: LetraComprobante,
 ): Promise<ReenvioResultado> {
   const { data: recRaw, error: recErr } = await supabase.from('recepciones')
-    .select('id,sucursal_id,proveedor_nombre,numero_comprobante,fecha_factura,comprobante_letra')
+    .select('id,sucursal_id,proveedor_nombre,numero_comprobante,fecha_factura,comprobante_letra,remito_numero')
     .eq('id', recepcionId)
     .maybeSingle()
 
@@ -191,7 +193,7 @@ export async function reenviarCompraADux(
   }
 
   const { data: itemsRaw } = await supabase.from('recepcion_items')
-    .select('producto_id,sku,es_granel,cantidad_esperada,cantidad_recibida,costo_unitario,iva_porcentaje')
+    .select('producto_id,sku,es_granel,cantidad_esperada,cantidad_recibida,costo_unitario,iva_porcentaje,sin_factura')
     .eq('recepcion_id', recepcionId)
 
   const items = (itemsRaw ?? []) as ItemRow[]
@@ -220,40 +222,81 @@ export async function reenviarCompraADux(
 
   const letraFinal = letra ?? (rec.comprobante_letra as LetraComprobante | null) ?? 'A'
 
-  const payload = {
+  /**
+   * Una entrega puede necesitar DOS comprobantes.
+   *
+   * Hay proveedores (Sedran) que mandan un remito con TODA la mercadería a
+   * precio neto y una factura por solo una parte. Lo facturado ya está adentro
+   * del remito. Los renglones marcados `sin_factura` salen aparte, como
+   * COMPROBANTE_COMPRA con el número de remito, sin letra y con IVA 0: mandarlos
+   * junto con la factura les aplicaría un IVA que no se pagó.
+   */
+  const armarPayload = (ls: ItemRow[], nro: string, l: LetraComprobante) => ({
     id_sucursal     : sucursal.dux_sucursal_id,
     id_proveedor    : provId,
     id_deposito     : sucursal.dux_deposito,
     fecha           : rec.fecha_factura,
-    nro_comprobante : nroComprobanteDux(rec.numero_comprobante ?? '', letraFinal) || 'S/N',
-    tipo_comprobante: tipoComprobanteDux(letraFinal),
-    productos: lineas.map(i => ({
+    nro_comprobante : nroComprobanteDux(nro, l) || 'S/N',
+    tipo_comprobante: tipoComprobanteDux(l),
+    productos: ls.map(i => ({
       id_item          : i.sku!,
       cantidad         : Number(i.cantidad_esperada),
       precio_unitario  : Number(i.costo_unitario),
-      iva_porcentaje   : Number(i.iva_porcentaje),
+      iva_porcentaje   : l === 'X' ? 0 : Number(i.iva_porcentaje),
       cantidad_recibida: Number(i.cantidad_recibida ?? i.cantidad_esperada),
     })),
-  }
+  })
 
-  let res: Response
-  try {
-    res = await fetch('/api/dux/compras', {
-      method : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body   : JSON.stringify(payload),
+  const conFactura = lineas.filter(i => !i.sin_factura)
+  const sinFactura = lineas.filter(i =>  i.sin_factura)
+  const nroRemito  = (rec.remito_numero ?? '').trim()
+
+  const envios: Array<{ etiqueta: string; payload: ReturnType<typeof armarPayload> }> = []
+  if (conFactura.length > 0) {
+    envios.push({
+      etiqueta: `factura ${rec.numero_comprobante ?? 'S/N'}`,
+      payload : armarPayload(conFactura, rec.numero_comprobante ?? '', letraFinal),
     })
-  } catch {
-    // Sin respuesta de Dux no sabemos si la compra entró o no, así que no se
-    // toca dux_sync_estado: pisarlo con 'error' podría tapar un envío que sí
-    // llegó y llevar a cargarla dos veces.
-    return { ok: false, motivo: 'No se pudo contactar a Dux. Probá de nuevo en un rato.' }
+  }
+  if (sinFactura.length > 0) {
+    // Sin número de remito no se manda: quedaría un comprobante 'S/N' en Dux,
+    // imposible de cruzar contra el papel y colisionable con cualquier otro.
+    if (!nroRemito) {
+      const motivo = `${sinFactura.length} ítems marcados "sin factura" no se pueden mandar: falta el número de remito en la recepción.`
+      await marcarSync(recepcionId, 'error', motivo)
+      return { ok: false, motivo }
+    }
+    envios.push({
+      etiqueta: `remito ${nroRemito}`,
+      payload : armarPayload(sinFactura, nroRemito, 'X'),
+    })
   }
 
-  if (res.ok) {
+  const fallidos: string[] = []
+  let ultimoFallo: { res: Response; payload: ReturnType<typeof armarPayload> } | null = null
+  for (const envio of envios) {
+    let res: Response
+    try {
+      res = await fetch('/api/dux/compras', {
+        method : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify(envio.payload),
+      })
+    } catch {
+      // Sin respuesta de Dux no sabemos si la compra entró o no, así que no se
+      // toca dux_sync_estado: pisarlo con 'error' podría tapar un envío que sí
+      // llegó y llevar a cargarla dos veces.
+      return { ok: false, motivo: 'No se pudo contactar a Dux. Probá de nuevo en un rato.' }
+    }
+    if (!res.ok) { fallidos.push(envio.etiqueta); ultimoFallo = { res, payload: envio.payload } }
+  }
+
+  if (fallidos.length === 0) {
     await marcarSync(recepcionId, 'ok')
     return { ok: true }
   }
+
+  const { res, payload } = ultimoFallo!
 
   const e = await res.json().catch(() => ({})) as Record<string, unknown>
   const duxResp = e.dux_response as Record<string, unknown> | null | undefined
@@ -261,7 +304,9 @@ export async function reenviarCompraADux(
                ?? (duxResp?.mensaje as string)
                ?? (e.error as string)
                ?? 'error desconocido'
-  const motivo = `Dux ${res.status}: ${mensaje}`
+  // Con dos comprobantes en juego hay que decir cuál falló: si entró la factura
+  // y no el remito, reintentar a ciegas duplicaría la factura.
+  const motivo = `Dux ${res.status}: ${mensaje} (${fallidos.join(', ')})`
 
   const enviados = (e.payload_sent as { productos?: unknown[] } | undefined)?.productos
   const detalle = Array.isArray(enviados)

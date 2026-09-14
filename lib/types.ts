@@ -197,6 +197,16 @@ export interface InvoiceLineItem {
   // Transferencia interna S2 → S1 (opcional, 0 = sin transferencia)
   transferir_cantidad?: number
 
+  // El renglón vino en el remito pero NO está en la factura.
+  //
+  // Algunos proveedores (Sedran) entregan con dos papeles: un remito con TODA
+  // la mercadería a precio neto y una factura por solo una parte. Lo facturado
+  // ya está adentro del remito, así que cargar los dos completos duplica.
+  // Marcando acá lo que la factura no cubre, al confirmar salen DOS
+  // comprobantes a Dux: la factura con su letra e IVA, y el resto como
+  // COMPROBANTE_COMPRA con el número de remito, sin letra y sin IVA.
+  sin_factura?: boolean
+
   // Granel (bulk by weight) — 1 supplier item → N final SKUs.
   // When es_granel = true, use `derivados` instead of producto_id.
   // Reception saved as draft; quantities updated as fractionation happens.

@@ -630,6 +630,9 @@ export default function RecepcionFacturaPage() {
   const [texto, setTexto]                     = useState('')
   const [tipoProveedor, setTipoProveedor]     = useState<ProveedorType | 'auto'>('auto')
   const [letraComprobante, setLetraComprobante] = useState<LetraComprobante>('A')
+  // Nro del remito que respalda los renglones marcados "sin factura". Solo se
+  // usa cuando hay alguno: es el comprobante aparte que va a Dux sin letra.
+  const [remitoNumero, setRemitoNumero]       = useState('')
   const [sucursalId, setSucursalId]           = useState(SUCURSALES[0].id)
   // Sucursal a la que se parten cantidades de esta recepción. Vacío = no se
   // parte nada, que es el caso normal; se elige en pantalla y ya no depende de
@@ -787,6 +790,7 @@ export default function RecepcionFacturaPage() {
       proveedor_nombre: string | null; nro_comprobante?: string | null; numero_comprobante?: string | null
       fecha_factura: string | null; sucursal_id: string | null; texto_original: string | null
       sucursal_destino_id?: string | null; comprobante_letra?: string | null
+      remito_numero?: string | null
     }
 
     const inv: ParsedFactura = {
@@ -809,6 +813,7 @@ export default function RecepcionFacturaPage() {
       precio_venta_sugerido: number | null
       unidades_por_blister: number | null
       transferir_cantidad: number | null
+      sin_factura: boolean | null
     }>
 
     // Fetch derivados for any granel items, then resolve product info from local state
@@ -924,6 +929,7 @@ export default function RecepcionFacturaPage() {
         es_blister            : /^BLISTER\s/i.test(it.nombre_producto ?? ''),
         unidades_por_blister  : it.unidades_por_blister ?? 1,
         transferir_cantidad   : it.transferir_cantidad ?? 0,
+        sin_factura           : !!it.sin_factura,
         es_granel             : !!it.es_granel,
         derivados             : it.es_granel ? (derivadosByItemId.get(it.id) ?? []) : undefined,
         lotes,
@@ -937,6 +943,7 @@ export default function RecepcionFacturaPage() {
     if (rec.comprobante_letra && ['A', 'B', 'C', 'X'].includes(rec.comprobante_letra)) {
       setLetraComprobante(rec.comprobante_letra as LetraComprobante)
     }
+    setRemitoNumero(rec.remito_numero ?? '')
     setTexto(rec.texto_original ?? '')
     setFactura(inv)
     setItems(reconstructed)
@@ -1481,6 +1488,12 @@ export default function RecepcionFacturaPage() {
           estado              : 'borrador',
           sucursal_id         : sucursalId,
           sucursal_destino_id : destinoId,
+          // La letra y el remito se guardan también acá, no solo al confirmar.
+          // Si no, quien marca renglones "sin factura" y guarda para seguir
+          // mañana pierde el número de remito, y el selector de letra vuelve a
+          // 'A' con el borrador ya abierto.
+          comprobante_letra   : letraComprobante,
+          remito_numero       : remitoNumero.trim() || null,
           last_edited_by      : CLIENT_ID,
           updated_at          : new Date().toISOString(),
         }).eq('id', recId)
@@ -1679,6 +1692,9 @@ export default function RecepcionFacturaPage() {
         // Se guarda para poder rearmar el payload de Dux al reintentar desde la
         // lista: antes la letra solo vivía en el estado de esta pantalla.
         comprobante_letra: letraComprobante,
+        // Respalda los renglones marcados "sin factura". Va vacío si no hay
+        // ninguno, que es el caso normal.
+        remito_numero   : remitoNumero.trim() || null,
         total_neto      : totalNeto,
         total_iva       : totalIva,
         total_factura   : totalFinal,
@@ -1832,7 +1848,7 @@ export default function RecepcionFacturaPage() {
       // embolsar, días después. Esas líneas se cargan a mano en Dux, como
       // siempre; SOHO se ocupa de lo que Dux no tiene (vencimiento, lote y
       // seguimiento del fraccionado).
-      type LineaDux = { sku: string; cantidad: number; costo: number; iva: number; recibida: number }
+      type LineaDux = { sku: string; cantidad: number; costo: number; iva: number; recibida: number; sinFactura: boolean }
       const duxItems: LineaDux[] = items
         .filter(i => !i.es_granel && i.producto_sku && i.cantidad > 0)
         .map(i => ({
@@ -1842,6 +1858,8 @@ export default function RecepcionFacturaPage() {
           iva      : i.iva_porcentaje,
           // Lo que realmente entró: incluye lo que se reparte al otro local.
           recibida : recibidoTotal(i),
+          // Vino en el remito pero la factura no lo cubre: va en otro comprobante.
+          sinFactura: !!i.sin_factura,
         }))
 
       // Resolve id_proveedor for the Dux purchase:
@@ -1886,38 +1904,91 @@ export default function RecepcionFacturaPage() {
         setDuxError('La compra NO se cargó en Dux: no se pudo determinar el proveedor en Dux. Configuralo en /compras/proveedores → campo "ID Dux".')
         await marcarSync('omitida', 'No se pudo determinar el proveedor en Dux')
       } else {
-        const duxPayload = {
+        // Una entrega puede necesitar DOS comprobantes en Dux.
+        //
+        // Hay proveedores (Sedran) que entregan con un remito que trae TODA la
+        // mercadería a precio neto y una factura por solo una parte. Lo
+        // facturado ya está adentro del remito. Mandar todo junto con la letra
+        // de la factura le aplicaría IVA a mercadería que se pagó sin IVA, y
+        // cargar los dos papeles completos duplicaría la entrega.
+        //
+        // Entonces: lo facturado va con el número y la letra de la factura; lo
+        // marcado "sin factura" va aparte, como COMPROBANTE_COMPRA con el
+        // número de remito, sin letra y con IVA 0.
+        const armarPayload = (lineas: LineaDux[], nro: string, letra: LetraComprobante) => ({
           id_sucursal     : sucursal.dux_sucursal_id,  // Dux logical branch: 1=SOHO1, 3=SOHO2
           id_proveedor    : provId,
           id_deposito     : sucursal.dux_deposito,
           fecha           : fechaISO,
-          nro_comprobante : nroComprobanteDux(factura.nro_comprobante ?? '', letraComprobante) || 'S/N',
+          nro_comprobante : nroComprobanteDux(nro, letra) || 'S/N',
           // Dux nombra el comprobante completo: "FACTURA A". Con la letra sola
           // responde 400 "Comprobante no reconocido".
-          tipo_comprobante: tipoComprobanteDux(letraComprobante),
+          tipo_comprobante: tipoComprobanteDux(letra),
           // For granel: use invoice quantity (what physically arrived), not cantidad_recibida
-          productos: duxItems.map(i => ({
+          productos: lineas.map(i => ({
             id_item         : i.sku,
             cantidad        : i.cantidad,
             precio_unitario : i.costo,
             // Alícuota de la línea: sin esto Dux aplica la del maestro del ítem
-            // e ignora el IVA que se cargó acá (21 vs 10.5).
-            iva_porcentaje  : i.iva,
+            // e ignora el IVA que se cargó acá (21 vs 10.5). En el remito no hay
+            // IVA que discriminar: mandarlo inflaría el costo de mercadería que
+            // se pagó neta.
+            iva_porcentaje  : letra === 'X' ? 0 : i.iva,
             // Lo que realmente entró, que puede diferir de lo facturado. Dux
             // lleva esto en ctd_recepcionada; antes la diferencia se quedaba
             // en SOHO y el faltante nunca llegaba al ERP para reclamarlo.
             cantidad_recibida: i.recibida,
           })),
+        })
+
+        const conFactura = duxItems.filter(i => !i.sinFactura)
+        const sinFactura = duxItems.filter(i =>  i.sinFactura)
+        const nroRemito  = remitoNumero.trim()
+
+        type Envio = { etiqueta: string; payload: ReturnType<typeof armarPayload> }
+        const envios: Envio[] = []
+        if (conFactura.length > 0) {
+          envios.push({
+            etiqueta: `factura ${factura.nro_comprobante ?? 'S/N'}`,
+            payload : armarPayload(conFactura, factura.nro_comprobante ?? '', letraComprobante),
+          })
+        }
+        // Sin número de remito no se manda: Dux quedaría con un comprobante
+        // 'S/N' imposible de cruzar contra el papel, y peor, colisionable con
+        // cualquier otro. Mejor que falte y se vea.
+        const faltaNroRemito = sinFactura.length > 0 && !nroRemito
+        if (sinFactura.length > 0 && nroRemito) {
+          envios.push({
+            etiqueta: `remito ${nroRemito}`,
+            payload : armarPayload(sinFactura, nroRemito, 'X'),
+          })
         }
 
-        const duxRes = await postDuxCompra(duxPayload)
-        if (duxRes) {
-          setDuxError(duxRes.msg + (duxRes.detail ? `\n\n${duxRes.detail}` : ''))
-          setDuxPayloadRetry(duxPayload)
-          await marcarSync('error', duxRes.msg)
-        } else {
-          await marcarSync('ok')
+        const fallidos: string[] = []
+        for (const envio of envios) {
+          const duxRes = await postDuxCompra(envio.payload)
+          if (duxRes) {
+            fallidos.push(`${envio.etiqueta}: ${duxRes.msg}`)
+            // El botón de reintentar rearma el primero que falló.
+            if (fallidos.length === 1) {
+              setDuxPayloadRetry(envio.payload)
+              setDuxError(duxRes.msg + (duxRes.detail ? `\n\n${duxRes.detail}` : ''))
+            }
+          }
         }
+
+        if (faltaNroRemito) {
+          fallidos.push(
+            `${sinFactura.length} ítems marcados "sin factura" NO se cargaron en Dux: falta el número de remito.`,
+          )
+          setDuxError(
+            `Hay ${sinFactura.length} ítems marcados "sin factura" pero no cargaste el número de remito. ` +
+            `Esa mercadería NO entró a Dux. Completá el remito y reintentá desde la lista de recepciones.`,
+          )
+        }
+
+        if (fallidos.length === 0) await marcarSync('ok')
+        else await marcarSync('error', fallidos.join(' · '))
       }
 
       // ── 5. Price Excel ───────────────────────────────────────
@@ -2308,6 +2379,27 @@ export default function RecepcionFacturaPage() {
           <div><span className="text-zinc-400">Margen:</span> <span className="font-medium">{(margenProveedor * 100).toFixed(0)}%</span></div>
           <div><span className="text-zinc-400">Costo total:</span> <span className="font-medium">${stats.totalCosto.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</span></div>
 
+          {/* Nro de remito para lo que la factura no cubre.
+              Aparece recién cuando se marca el primer renglón "S/Fact.", que es
+              el momento en que hace falta: sin este número esa mercadería no se
+              puede mandar a Dux (quedaría un comprobante S/N imposible de
+              cruzar contra el papel). */}
+          {items.some(i => i.sin_factura) && (
+            <div className="flex items-center gap-2">
+              <span className="text-amber-700 font-medium">
+                Remito ({items.filter(i => i.sin_factura).length} s/factura):
+              </span>
+              <input
+                value={remitoNumero}
+                onChange={e => setRemitoNumero(e.target.value)}
+                placeholder="0007-00015218"
+                className={`w-40 border rounded px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-amber-400 ${
+                  remitoNumero.trim() ? 'border-amber-300' : 'border-amber-500 bg-amber-50'
+                }`}
+              />
+            </div>
+          )}
+
           {/* Destino para partir mercadería.
               Va acá y no solo en la pantalla de pegar la factura: al abrir un
               borrador se entra directo a esta pantalla, así que allá el
@@ -2384,6 +2476,12 @@ export default function RecepcionFacturaPage() {
                   <th className="text-left px-2 py-2 text-xs font-medium text-zinc-500 w-36">Vencimiento</th>
                   <th className="text-center px-2 py-2 text-xs font-medium text-zinc-500 w-16">IVA</th>
                   <th className="text-center px-2 py-2 text-xs font-medium text-zinc-500 w-20">Tipo</th>
+                  <th
+                    className="text-center px-2 py-2 text-xs font-medium text-amber-600 w-16"
+                    title="Vino en el remito pero NO está en la factura. Va a Dux en un comprobante aparte, sin IVA."
+                  >
+                    S/Fact.
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -2605,6 +2703,19 @@ export default function RecepcionFacturaPage() {
                             marcar granel
                           </button>
                         )}
+                      </td>
+
+                      {/* Sin factura: el renglón vino en el remito pero la
+                          factura no lo cubre. Al confirmar sale en un
+                          comprobante aparte, sin letra y sin IVA. */}
+                      <td className="px-2 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={!!item.sin_factura}
+                          onChange={e => updateItem(i, { sin_factura: e.target.checked })}
+                          className="h-4 w-4 accent-amber-600 cursor-pointer"
+                          title="Marcar si este renglón NO está en la factura"
+                        />
                       </td>
                     </tr>
                   )
