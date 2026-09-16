@@ -226,34 +226,99 @@ export interface ProductoLapyme {
   sku: string | null
   product_type: string
   category: { id: string; name: string } | null
+  /** En centavos. Para el padre es el costo de UN kilo. */
+  cost: number
   /** La API las manda como texto; se contempla objeto por si eso cambia. */
   tags: Array<string | { id?: string; name?: string }> | null
 }
 
+/** Un formato de venta de un producto de granel. */
+export interface FormatoGranel {
+  sku: string
+  /** '1kg', '3kg', 'Bulto cerrado'. */
+  etiqueta: string
+  /** Kilos que lleva el formato. */
+  kg: number
+  /** Costo del formato, en pesos. */
+  costo: number
+}
+
 /**
- * Los `product_id` de la línea de granel.
+ * La línea de granel, separada en lo que mueve stock y lo que se vende.
+ *
+ * El **producto padre** (`product_type: 'product'`) es el que lleva el stock en
+ * kilos y el único que se muestra en la pantalla de stock. Los **combos** son
+ * los formatos de venta: se arman recién cuando entra el pedido, así que no
+ * tienen stock propio.
+ */
+export interface CatalogoGranel {
+  /** `product_id` de los padres — los que mueven stock. */
+  padres: Set<string>
+  /** `product_id` del padre → sus formatos, ordenados de menor a mayor. */
+  formatos: Map<string, FormatoGranel[]>
+}
+
+/**
+ * Cuántos kilos lleva un formato.
+ *
+ * Los numerados salen del sufijo del SKU (`GRA-009-3KG` → 3). El **bulto
+ * cerrado** no lo dice en ningún lado, pero el costo de cada combo es múltiplo
+ * exacto del costo por kilo del padre —verificado sobre los 19 productos el
+ * 16/09/2026—, así que se deriva de ahí. Los bultos van de 4 kg (dátil) a 25 kg
+ * (chía, coco, maíz); los importados vienen en libras: 11,34 kg el pistacho
+ * (25 lb) y 22,68 kg la castaña (50 lb).
+ */
+function kgDelFormato(skuCombo: string, costoCombo: number, costoPadrePorKg: number): number {
+  const m = /-(\d+)KG$/i.exec(skuCombo)
+  if (m) return Number(m[1])
+  if (costoPadrePorKg > 0) return costoCombo / costoPadrePorKg
+  return 0
+}
+
+/**
+ * Trae la línea de granel de La Pyme y la separa en padres y formatos.
  *
  * La etiqueta vive SOLO en /products: el inventario no la devuelve (verificado
  * el 16/09/2026 contra la API real), así que para saber qué mostrar hay que
- * cruzar las dos listas. Al 16/09/2026 son 93 de 356 productos: 19 productos
- * base (el granel suelto, `product`) y 74 presentaciones (`combo`: 1kg, 3kg,
- * 5kg, 10kg y bulto cerrado).
+ * cruzar las dos listas por `product_id`. Al 16/09/2026 son 93 de 356
+ * productos: 19 padres y 74 formatos.
  */
-export async function idsGranel(): Promise<Set<string>> {
+export async function catalogoGranel(): Promise<CatalogoGranel> {
   const prods = await lapymeGetTodo<ProductoLapyme>(
     'products',
     r => (r.data as ProductoLapyme[] | undefined) ?? [],
   )
-  const ids = new Set<string>()
-  for (const p of prods) {
+
+  const granel = prods.filter(p => {
     const tags = Array.isArray(p.tags) ? p.tags : []
-    const esGranel = tags.some(t => {
+    return tags.some(t => {
       const nombre = typeof t === 'string' ? t : (t?.name ?? '')
       return nombre.trim().toUpperCase() === TAG_GRANEL
     })
-    if (esGranel) ids.add(p.id)
+  })
+
+  const padresPorSku = new Map<string, ProductoLapyme>()
+  for (const p of granel) if (p.product_type === 'product' && p.sku) padresPorSku.set(p.sku, p)
+
+  const formatos = new Map<string, FormatoGranel[]>()
+  for (const c of granel) {
+    if (c.product_type === 'product' || !c.sku) continue
+    // 'GRA-009-3KG' y 'GRA-009-BC' cuelgan de 'GRA-009'.
+    const skuPadre = c.sku.replace(/-(\d+KG|BC)$/i, '')
+    const padre = padresPorSku.get(skuPadre)
+    if (!padre) continue
+    const lista = formatos.get(padre.id) ?? []
+    lista.push({
+      sku      : c.sku,
+      etiqueta : /-BC$/i.test(c.sku) ? 'Bulto cerrado' : (/-(\d+)KG$/i.exec(c.sku)?.[1] ?? '?') + 'kg',
+      kg       : kgDelFormato(c.sku, c.cost ?? 0, padre.cost ?? 0),
+      costo    : centavosAPesos(c.cost ?? 0),
+    })
+    formatos.set(padre.id, lista)
   }
-  return ids
+  for (const lista of formatos.values()) lista.sort((a, b) => a.kg - b.kg)
+
+  return { padres: new Set([...padresPorSku.values()].map(p => p.id)), formatos }
 }
 
 /** Los importes vienen en centavos. */

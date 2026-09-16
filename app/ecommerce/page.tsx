@@ -3,13 +3,16 @@
 /**
  * Ecommerce Shuk — inventario de la línea de granel.
  *
- * Muestra SOLO los productos con la etiqueta GRANEL de La Pyme: 93 de 356 al
- * 16/09/2026 (19 productos base y 74 presentaciones de 1kg, 3kg, 5kg, 10kg y
- * bulto cerrado). El resto del catálogo — ECOM, DISTRI, TiendaNube — lo maneja
- * Shuk por su cuenta y acá es ruido.
+ * Muestra los 19 productos PADRE de la linea de granel: son los que llevan el
+ * stock en kilos y los que se fraccionan. Los 74 combos (1kg, 3kg, 5kg, 10kg,
+ * bulto cerrado) son formatos de venta que se arman cuando entra el pedido y no
+ * tienen stock propio: aparecen como etiquetas en la fila del padre, no como
+ * filas sueltas. Listarlos seria contar cinco veces la misma mercaderia.
  *
- * La etiqueta NO viene en el inventario, solo en /products, así que la pantalla
- * cruza las dos listas por product_id.
+ * De los 356 productos de La Pyme solo 93 son granel; el resto — ECOM, DISTRI,
+ * TiendaNube — lo maneja Shuk por su cuenta. La etiqueta GRANEL viene SOLO en
+ * /products, no en el inventario, asi que la pantalla cruza las dos listas por
+ * product_id (ver catalogoGranel).
  */
 
 import { useEffect, useState, useCallback } from 'react'
@@ -20,8 +23,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { formatNum, toTitleCase } from '@/lib/format'
 import { matchesQuery } from '@/lib/search'
 import {
-  lapymeGet, lapymeGetTodo, idsGranel, LapymeApiError, centavosAPesos,
-  type LapymeLista, type Deposito, type ItemInventario, type Pedido,
+  lapymeGet, lapymeGetTodo, catalogoGranel, LapymeApiError, centavosAPesos,
+  type LapymeLista, type Deposito, type ItemInventario, type Pedido, type FormatoGranel,
 } from '@/lib/lapyme'
 
 /** Guarda el depósito elegido para no volver a elegirlo en cada visita. */
@@ -31,6 +34,8 @@ export default function EcommercePage() {
   const [depositos, setDepositos] = useState<Deposito[]>([])
   const [depositoId, setDepositoId] = useState<string>('')
   const [items, setItems] = useState<ItemInventario[]>([])
+  /** product_id del padre -> sus formatos de venta. Solo para mostrar. */
+  const [formatos, setFormatos] = useState<Map<string, FormatoGranel[]>>(new Map())
   const [pedidos, setPedidos] = useState<Pedido[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<{ msg: string; detalle?: string } | null>(null)
@@ -69,21 +74,24 @@ export default function EcommercePage() {
     if (!id) return
     setCargando(true)
     try {
-      // Solo la línea de granel. El resto del catálogo de La Pyme (ECOM,
-      // DISTRI, TiendaNube) lo maneja Shuk por su cuenta y acá es ruido: son
-      // 263 de 356 productos. La etiqueta no viene en el inventario, así que
-      // hay que traer el catálogo aparte y cruzar por product_id.
+      // Solo la línea de granel, y de esa línea solo los PADRES.
+      //
+      // El padre es el que lleva el stock en kilos. Los combos (1kg, 3kg, 5kg,
+      // 10kg, bulto cerrado) son formatos de venta que se arman recién cuando
+      // entra el pedido, así que mostrarlos acá sería contar cinco veces la
+      // misma mercadería. Quedan 19 filas en vez de 93.
       //
       // Las dos listas se piden completas: paginadas, no los primeros 100.
-      const [granel, inv] = await Promise.all([
-        idsGranel(),
+      const [cat, inv] = await Promise.all([
+        catalogoGranel(),
         lapymeGetTodo<ItemInventario>(
           'inventory',
           r => ((r.data as { items?: ItemInventario[] } | undefined)?.items) ?? [],
           { warehouse_id: id },
         ),
       ])
-      setItems(inv.filter(i => granel.has(i.product_id)))
+      setItems(inv.filter(i => cat.padres.has(i.product_id)))
+      setFormatos(cat.formatos)
       setError(null)
     } catch (err) {
       const e = err as LapymeApiError
@@ -166,10 +174,11 @@ export default function EcommercePage() {
       {/* Resumen */}
       {!error && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-          <Resumen label="Productos granel" valor={cargando ? '—' : formatNum(items.length, 0)} />
+          <Resumen label="Productos granel" valor={cargando ? '—' : formatNum(items.length, 0)}
+            nota="los que mueven stock" />
           <Resumen label="Con stock" valor={cargando ? '—' : formatNum(conStock, 0)} />
-          <Resumen label="Reservados" valor={cargando ? '—' : formatNum(reservados, 0)}
-            nota="unidades comprometidas" />
+          <Resumen label="Kilos reservados" valor={cargando ? '—' : formatNum(reservados, 2)}
+            nota="comprometidos en pedidos" />
           <Resumen label="Pedidos" valor={cargando ? '—' : formatNum(pedidos.length, 0)}
             nota={pedidos.length === 0 ? 'ninguno todavía' : 'últimos 20'} />
         </div>
@@ -207,10 +216,10 @@ export default function EcommercePage() {
                 <TableRow className="bg-zinc-50">
                   <TableHead className="w-20">SKU</TableHead>
                   <TableHead>Producto</TableHead>
-                  <TableHead>Categoría</TableHead>
-                  <TableHead className="text-right">Disponible</TableHead>
-                  <TableHead className="text-right">Reservado</TableHead>
-                  <TableHead className="text-right">Precio</TableHead>
+                  <TableHead className="text-right w-24">Kilos</TableHead>
+                  <TableHead className="text-right w-24">Reservado</TableHead>
+                  <TableHead className="text-right w-28">Costo /kg</TableHead>
+                  <TableHead>Formatos de venta</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -228,10 +237,11 @@ export default function EcommercePage() {
                   <TableRow key={i.product_id} className="hover:bg-zinc-50">
                     <TableCell className="font-mono text-xs text-zinc-500">{i.sku ?? '—'}</TableCell>
                     <TableCell className="text-sm">{toTitleCase(i.product_name)}</TableCell>
-                    <TableCell className="text-xs text-zinc-500">{i.category?.name ?? '—'}</TableCell>
                     <TableCell className="text-right tabular-nums text-sm">
-                      {/* El ERP admite existencias negativas: se deja ver, en rojo,
-                          porque es justo lo que la línea nueva no debería repetir. */}
+                      {/* El stock del padre son KILOS: es el que se fracciona.
+                          El ERP admite existencias negativas: se deja ver, en
+                          rojo, porque es justo lo que la línea nueva no debería
+                          repetir. */}
                       <span className={i.stock.available < 0 ? 'text-red-600 font-semibold' : 'text-zinc-700'}>
                         {formatNum(i.stock.available, 2)}
                       </span>
@@ -240,7 +250,26 @@ export default function EcommercePage() {
                       {i.stock.reserved ? formatNum(i.stock.reserved, 2) : '—'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-sm text-zinc-500">
-                      ${formatNum(centavosAPesos(i.price), 0)}
+                      ${formatNum(centavosAPesos(i.cost), 0)}
+                    </TableCell>
+                    <TableCell>
+                      {/* Los formatos no tienen stock propio: se arman del padre
+                          cuando entra el pedido. Van acá para saber en qué se
+                          vende cada cosa y cuántos kilos lleva el bulto. */}
+                      <div className="flex flex-wrap gap-1">
+                        {(formatos.get(i.product_id) ?? []).map(f => (
+                          <Badge
+                            key={f.sku}
+                            className="bg-zinc-100 text-zinc-600 border-zinc-200 text-[10px] px-1.5 font-normal"
+                            title={`${f.sku} · ${formatNum(f.kg, 2)} kg · costo $${formatNum(f.costo, 0)}`}
+                          >
+                            {f.etiqueta === 'Bulto cerrado' ? `Bulto ${formatNum(f.kg, 2)}kg` : f.etiqueta}
+                          </Badge>
+                        ))}
+                        {(formatos.get(i.product_id) ?? []).length === 0 && (
+                          <span className="text-xs text-zinc-300">sin formatos</span>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -248,11 +277,6 @@ export default function EcommercePage() {
             </Table>
           </div>
         </div>
-        {!cargando && items.length >= 100 && (
-          <p className="text-[11px] text-zinc-400">
-            Se muestran los primeros 100. La paginación completa entra cuando la línea tenga catálogo propio.
-          </p>
-        )}
       </div>
 
       {/* Pedidos */}
