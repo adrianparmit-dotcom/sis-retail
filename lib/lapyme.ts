@@ -184,7 +184,77 @@ export async function lapymeGet<T>(
   return cuerpo as T
 }
 
+/**
+ * Trae TODAS las páginas de un recurso.
+ *
+ * La Pyme corta en 100 por página y devuelve `next_cursor`. Pedir una sola
+ * página deja datos afuera sin avisar: el inventario son 356 ítems y la
+ * pantalla mostraba los primeros 100 como si fueran todos.
+ *
+ * `extraer` hace falta porque las respuestas no tienen la misma forma: en
+ * /products la lista cuelga de `data`, y en /inventory de `data.items`.
+ */
+export async function lapymeGetTodo<T>(
+  recurso: string,
+  extraer: (respuesta: Record<string, unknown>) => T[],
+  params: Record<string, string | number> = {},
+  maxPaginas = 40,
+): Promise<T[]> {
+  const out: T[] = []
+  let cursor: string | null = null
+  for (let i = 0; i < maxPaginas; i++) {
+    const query: Record<string, string | number> = { ...params, limit: 100 }
+    if (cursor) query.cursor = cursor
+    const r: Record<string, unknown> = await lapymeGet<Record<string, unknown>>(recurso, query)
+    out.push(...extraer(r))
+    const siguiente = r.next_cursor
+    cursor = typeof siguiente === 'string' ? siguiente : null
+    if (r.has_more !== true || !cursor) break
+  }
+  return out
+}
+
 // ── Helpers de dominio ───────────────────────────────────────────────
+
+/** La etiqueta con la que Shuk marca la línea de granel en La Pyme. */
+export const TAG_GRANEL = 'GRANEL'
+
+/** Un producto del catálogo. Solo los campos que se usan para filtrar. */
+export interface ProductoLapyme {
+  id: string
+  name: string
+  sku: string | null
+  product_type: string
+  category: { id: string; name: string } | null
+  /** La API las manda como texto; se contempla objeto por si eso cambia. */
+  tags: Array<string | { id?: string; name?: string }> | null
+}
+
+/**
+ * Los `product_id` de la línea de granel.
+ *
+ * La etiqueta vive SOLO en /products: el inventario no la devuelve (verificado
+ * el 16/09/2026 contra la API real), así que para saber qué mostrar hay que
+ * cruzar las dos listas. Al 16/09/2026 son 93 de 356 productos: 19 productos
+ * base (el granel suelto, `product`) y 74 presentaciones (`combo`: 1kg, 3kg,
+ * 5kg, 10kg y bulto cerrado).
+ */
+export async function idsGranel(): Promise<Set<string>> {
+  const prods = await lapymeGetTodo<ProductoLapyme>(
+    'products',
+    r => (r.data as ProductoLapyme[] | undefined) ?? [],
+  )
+  const ids = new Set<string>()
+  for (const p of prods) {
+    const tags = Array.isArray(p.tags) ? p.tags : []
+    const esGranel = tags.some(t => {
+      const nombre = typeof t === 'string' ? t : (t?.name ?? '')
+      return nombre.trim().toUpperCase() === TAG_GRANEL
+    })
+    if (esGranel) ids.add(p.id)
+  }
+  return ids
+}
 
 /** Los importes vienen en centavos. */
 export function centavosAPesos(centavos: number): number {

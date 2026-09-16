@@ -1,12 +1,15 @@
 'use client'
 
 /**
- * Ecommerce Shuk — estado de la conexión con La Pyme.
+ * Ecommerce Shuk — inventario de la línea de granel.
  *
- * Primera pantalla de la línea de granel. Todavía no opera nada: sirve para ver
- * que los datos del ERP llegan y para elegir con qué depósito trabaja la línea.
- * Cuando estén cargados los frutos secos, de acá salen las pantallas de
- * recepción, stock y preparación de pedidos.
+ * Muestra SOLO los productos con la etiqueta GRANEL de La Pyme: 93 de 356 al
+ * 16/09/2026 (19 productos base y 74 presentaciones de 1kg, 3kg, 5kg, 10kg y
+ * bulto cerrado). El resto del catálogo — ECOM, DISTRI, TiendaNube — lo maneja
+ * Shuk por su cuenta y acá es ruido.
+ *
+ * La etiqueta NO viene en el inventario, solo en /products, así que la pantalla
+ * cruza las dos listas por product_id.
  */
 
 import { useEffect, useState, useCallback } from 'react'
@@ -17,8 +20,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { formatNum, toTitleCase } from '@/lib/format'
 import { matchesQuery } from '@/lib/search'
 import {
-  lapymeGet, LapymeApiError, centavosAPesos,
-  type LapymeLista, type Deposito, type ItemInventario, type RespuestaInventario, type Pedido,
+  lapymeGet, lapymeGetTodo, idsGranel, LapymeApiError, centavosAPesos,
+  type LapymeLista, type Deposito, type ItemInventario, type Pedido,
 } from '@/lib/lapyme'
 
 /** Guarda el depósito elegido para no volver a elegirlo en cada visita. */
@@ -66,8 +69,21 @@ export default function EcommercePage() {
     if (!id) return
     setCargando(true)
     try {
-      const inv = await lapymeGet<RespuestaInventario>('inventory', { warehouse_id: id, limit: 100 })
-      setItems(inv.data?.items ?? [])
+      // Solo la línea de granel. El resto del catálogo de La Pyme (ECOM,
+      // DISTRI, TiendaNube) lo maneja Shuk por su cuenta y acá es ruido: son
+      // 263 de 356 productos. La etiqueta no viene en el inventario, así que
+      // hay que traer el catálogo aparte y cruzar por product_id.
+      //
+      // Las dos listas se piden completas: paginadas, no los primeros 100.
+      const [granel, inv] = await Promise.all([
+        idsGranel(),
+        lapymeGetTodo<ItemInventario>(
+          'inventory',
+          r => ((r.data as { items?: ItemInventario[] } | undefined)?.items) ?? [],
+          { warehouse_id: id },
+        ),
+      ])
+      setItems(inv.filter(i => granel.has(i.product_id)))
       setError(null)
     } catch (err) {
       const e = err as LapymeApiError
@@ -99,7 +115,7 @@ export default function EcommercePage() {
         <div>
           <h1 className="text-xl font-semibold text-zinc-900">Ecommerce Shuk</h1>
           <p className="text-sm text-zinc-500 mt-0.5">
-            Línea de granel de shuk.ar · datos en vivo de La Pyme
+            Línea de granel de shuk.ar · datos en vivo de La Pyme · solo etiqueta GRANEL
           </p>
         </div>
       </div>
@@ -150,7 +166,7 @@ export default function EcommercePage() {
       {/* Resumen */}
       {!error && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-          <Resumen label="Productos" valor={cargando ? '—' : formatNum(items.length, 0)} />
+          <Resumen label="Productos granel" valor={cargando ? '—' : formatNum(items.length, 0)} />
           <Resumen label="Con stock" valor={cargando ? '—' : formatNum(conStock, 0)} />
           <Resumen label="Reservados" valor={cargando ? '—' : formatNum(reservados, 0)}
             nota="unidades comprometidas" />
@@ -163,7 +179,7 @@ export default function EcommercePage() {
       <div className="space-y-2.5">
         <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">
-            Inventario del depósito
+            Inventario de granel
           </h2>
           <div className="relative max-w-xs flex-1 min-w-[180px]">
             <Input
