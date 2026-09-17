@@ -15,13 +15,17 @@
  * product_id (ver catalogoGranel).
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Fragment } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { formatNum, toTitleCase } from '@/lib/format'
+import { toast } from 'sonner'
+import { supabase } from '@/lib/supabase'
+import { formatNum, toTitleCase, hoyISO } from '@/lib/format'
+import { generarEtiquetasGranel, descargarEtiquetasGranel } from '@/lib/etiqueta-granel'
 import { matchesQuery } from '@/lib/search'
+import { Printer } from 'lucide-react'
 import {
   lapymeGet, lapymeGetTodo, catalogoGranel, LapymeApiError, centavosAPesos,
   type LapymeLista, type Deposito, type ItemInventario, type Pedido, type FormatoGranel,
@@ -36,6 +40,21 @@ export default function EcommercePage() {
   const [items, setItems] = useState<ItemInventario[]>([])
   /** product_id del padre -> sus formatos de venta. Solo para mostrar. */
   const [formatos, setFormatos] = useState<Map<string, FormatoGranel[]>>(new Map())
+  /**
+   * product_id -> vencimiento más próximo habilitado para vender (FEFO).
+   *
+   * Sale de `ecom_vencimientos`, que carga la pantalla de Recepciones Shuk.
+   * Mientras no haya recepciones cargadas viene vacío y la fecha de la etiqueta
+   * se escribe a mano; cuando empiecen a cargarse, se completa sola.
+   */
+  const [vencPorProducto, setVencPorProducto] = useState<Map<string, string>>(new Map())
+
+  // Etiquetas: qué producto se está etiquetando y con qué datos.
+  const [etiquetaDe, setEtiquetaDe] = useState<string | null>(null)
+  const [fmtSel, setFmtSel]   = useState('')
+  const [cantEtq, setCantEtq] = useState(1)
+  const [vencEtq, setVencEtq] = useState('')
+  const [imprimiendo, setImprimiendo] = useState(false)
   const [pedidos, setPedidos] = useState<Pedido[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<{ msg: string; detalle?: string } | null>(null)
@@ -93,6 +112,22 @@ export default function EcommercePage() {
       setItems(inv.filter(i => cat.padres.has(i.product_id)))
       setFormatos(cat.formatos)
       setError(null)
+
+      // Vencimiento FEFO por producto, para precargar la etiqueta. Vive en
+      // Supabase, no en La Pyme: el ERP no lleva vencimientos, esa es
+      // justamente la parte que pone SOHO.
+      const { data: vencs } = await supabase
+        .from('ecom_vencimientos')
+        .select('lapyme_product_id, fecha_vencimiento')
+        .eq('estado', 'habilitado')
+        .not('lapyme_product_id', 'is', null)
+        .order('fecha_vencimiento')
+      const mapa = new Map<string, string>()
+      for (const v of (vencs ?? []) as { lapyme_product_id: string; fecha_vencimiento: string }[]) {
+        // Vienen ordenados: el primero de cada producto es el más próximo.
+        if (!mapa.has(v.lapyme_product_id)) mapa.set(v.lapyme_product_id, v.fecha_vencimiento)
+      }
+      setVencPorProducto(mapa)
     } catch (err) {
       const e = err as LapymeApiError
       setError({ msg: e.message, detalle: e.detalle })
@@ -107,6 +142,41 @@ export default function EcommercePage() {
   function elegirDeposito(id: string) {
     setDepositoId(id)
     try { localStorage.setItem(CLAVE_DEPOSITO, id) } catch { /* modo privado */ }
+  }
+
+  /** Abre el panel de etiquetas de un producto, precargado con lo que se sabe. */
+  function abrirEtiquetas(i: ItemInventario) {
+    if (etiquetaDe === i.product_id) { setEtiquetaDe(null); return }
+    setEtiquetaDe(i.product_id)
+    const fmts = formatos.get(i.product_id) ?? []
+    // Arranca por el formato más chico, que es el que más se fracciona.
+    setFmtSel(fmts[0]?.sku ?? '')
+    setCantEtq(1)
+    setVencEtq(vencPorProducto.get(i.product_id) ?? '')
+  }
+
+  async function imprimirEtiquetas(i: ItemInventario, descargar: boolean) {
+    const fmt = (formatos.get(i.product_id) ?? []).find(f => f.sku === fmtSel)
+    if (!fmt) { toast.error('Elegí el formato del paquete.'); return }
+    if (!vencEtq) { toast.error('Falta el vencimiento. Sin eso la etiqueta no sirve.'); return }
+    if (vencEtq < hoyISO()) { toast.error('El vencimiento ya pasó. Revisá la fecha.'); return }
+
+    const etiqueta = {
+      nombre     : i.product_name,
+      formato    : fmt.etiqueta === 'Bulto cerrado' ? `Bulto ${formatNum(fmt.kg, 2)} kg` : fmt.etiqueta,
+      vencimiento: vencEtq,
+      sku        : fmt.sku,
+    }
+    setImprimiendo(true)
+    try {
+      if (descargar) await descargarEtiquetasGranel([etiqueta], cantEtq, `etiquetas-${fmt.sku}.pdf`)
+      else await generarEtiquetasGranel([etiqueta], cantEtq)
+      toast.success(`${cantEtq} etiqueta${cantEtq === 1 ? '' : 's'} de ${etiqueta.formato}`)
+    } catch (err) {
+      toast.error('No se pudo generar el PDF: ' + (err as Error).message)
+    } finally {
+      setImprimiendo(false)
+    }
   }
 
   const visibles = busqueda
@@ -220,21 +290,23 @@ export default function EcommercePage() {
                   <TableHead className="text-right w-24">Reservado</TableHead>
                   <TableHead className="text-right w-28">Costo /kg</TableHead>
                   <TableHead>Formatos de venta</TableHead>
+                  <TableHead className="w-24"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {cargando ? (
-                  <TableRow><TableCell colSpan={6} className="text-center text-zinc-400 py-12">Cargando...</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} className="text-center text-zinc-400 py-12">Cargando...</TableCell></TableRow>
                 ) : visibles.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-12">
+                    <TableCell colSpan={7} className="text-center py-12">
                       <p className="text-zinc-400">
                         {items.length === 0 ? 'El depósito no tiene productos cargados' : 'Sin coincidencias'}
                       </p>
                     </TableCell>
                   </TableRow>
                 ) : visibles.map(i => (
-                  <TableRow key={i.product_id} className="hover:bg-zinc-50">
+                  <Fragment key={i.product_id}>
+                  <TableRow className="hover:bg-zinc-50">
                     <TableCell className="font-mono text-xs text-zinc-500">{i.sku ?? '—'}</TableCell>
                     <TableCell className="text-sm">{toTitleCase(i.product_name)}</TableCell>
                     <TableCell className="text-right tabular-nums text-sm">
@@ -271,7 +343,89 @@ export default function EcommercePage() {
                         )}
                       </div>
                     </TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="outline" size="sm" className="h-7 text-xs"
+                        onClick={() => abrirEtiquetas(i)}>
+                        <Printer size={12} className="mr-1" />
+                        Etiquetas
+                      </Button>
+                    </TableCell>
                   </TableRow>
+
+                  {/* Panel de etiquetas del producto. Se despliega debajo de su
+                      fila para no perder de vista de cuál se está hablando. */}
+                  {etiquetaDe === i.product_id && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="bg-amber-50 border-y border-amber-200">
+                        <div className="flex flex-wrap items-end gap-4 py-1">
+                          <div>
+                            <label className="block text-[11px] font-medium text-amber-800 uppercase tracking-wide mb-1">
+                              Formato del paquete
+                            </label>
+                            <select
+                              value={fmtSel}
+                              onChange={e => setFmtSel(e.target.value)}
+                              className="border border-amber-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                            >
+                              {(formatos.get(i.product_id) ?? []).map(f => (
+                                <option key={f.sku} value={f.sku}>
+                                  {f.etiqueta === 'Bulto cerrado' ? `Bulto ${formatNum(f.kg, 2)} kg` : f.etiqueta}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-medium text-amber-800 uppercase tracking-wide mb-1">
+                              Cuántas
+                            </label>
+                            <input
+                              type="number" min={1} max={200}
+                              value={cantEtq}
+                              onChange={e => setCantEtq(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
+                              className="w-20 border border-amber-300 rounded px-2 py-1 text-sm bg-white text-right tabular-nums focus:outline-none focus:ring-1 focus:ring-amber-400"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-medium text-amber-800 uppercase tracking-wide mb-1">
+                              Vencimiento
+                            </label>
+                            <input
+                              type="date"
+                              value={vencEtq}
+                              onChange={e => setVencEtq(e.target.value)}
+                              className={`border rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400 ${
+                                vencEtq ? 'border-amber-300' : 'border-amber-500'
+                              }`}
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Button size="sm" className="h-8 bg-amber-600 hover:bg-amber-700 text-white"
+                              disabled={imprimiendo}
+                              onClick={() => imprimirEtiquetas(i, false)}>
+                              <Printer size={13} className="mr-1" />
+                              {imprimiendo ? 'Generando...' : 'Imprimir'}
+                            </Button>
+                            <Button size="sm" variant="outline" className="h-8"
+                              disabled={imprimiendo}
+                              onClick={() => imprimirEtiquetas(i, true)}>
+                              Descargar
+                            </Button>
+                          </div>
+
+                          <p className="text-[11px] text-amber-700 basis-full">
+                            {vencPorProducto.has(i.product_id)
+                              ? 'La fecha viene del vencimiento más próximo cargado en la recepción. Podés cambiarla.'
+                              : 'Todavía no hay recepciones cargadas para este producto, así que la fecha va a mano.'}
+                            {' '}Etiqueta de 100 × 150 mm — imprimir a tamaño real, sin ajustar a la hoja.
+                          </p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>

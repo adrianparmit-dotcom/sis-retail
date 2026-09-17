@@ -310,7 +310,7 @@ export async function catalogoGranel(): Promise<CatalogoGranel> {
     const lista = formatos.get(padre.id) ?? []
     lista.push({
       sku      : c.sku,
-      etiqueta : /-BC$/i.test(c.sku) ? 'Bulto cerrado' : (/-(\d+)KG$/i.exec(c.sku)?.[1] ?? '?') + 'kg',
+      etiqueta : /-BC$/i.test(c.sku) ? 'Bulto cerrado' : (/-(\d+)KG$/i.exec(c.sku)?.[1] ?? '?') + ' kg',
       kg       : kgDelFormato(c.sku, c.cost ?? 0, padre.cost ?? 0),
       costo    : centavosAPesos(c.cost ?? 0),
     })
