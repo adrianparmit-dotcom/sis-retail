@@ -129,9 +129,28 @@ export default function RequerimientosPage() {
     if (error) { toast.error('No se pudo marcar: ' + error.message); return }
     setReqs(prev => prev.map(x => x.id === r.id
       ? { ...x, estado: 'armado', armado_at: new Date().toISOString() } : x))
-    // El aviso por WhatsApp a David y Adrián para el traslado interno se
-    // engancha acá, cuando esté aprobada la plantilla en Meta.
     toast.success(`Pedido ${r.pedido} marcado como armado.`)
+
+    // Aviso a David y Adrián para el traslado de SOHO al depósito de Shuk.
+    //
+    // Va DESPUÉS de marcar y sin bloquear: si el WhatsApp falla, el armado no
+    // se pierde. El resultado queda guardado en la recepción, así que un aviso
+    // que no salió se puede ver y reintentar.
+    try {
+      const res = await fetch('/api/shuk-pedidos/aviso', {
+        method : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify({ requerimiento_id: r.id }),
+      })
+      const j = await res.json().catch(() => ({})) as { ok?: boolean; envios?: Array<{ ok: boolean; info: string }> }
+      if (res.ok && j.ok) toast.success('Avisado por WhatsApp para el traslado')
+      else {
+        const motivo = j.envios?.find(e => !e.ok)?.info ?? 'no se pudo enviar'
+        toast.error(`El pedido quedó armado, pero el aviso de WhatsApp falló: ${motivo}`, { duration: 9000 })
+      }
+    } catch {
+      toast.error('El pedido quedó armado, pero no se pudo mandar el aviso de WhatsApp.', { duration: 9000 })
+    }
   }
 
   const pendientes = reqs.filter(r => r.estado === 'pendiente')
