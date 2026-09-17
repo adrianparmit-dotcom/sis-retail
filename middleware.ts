@@ -1,8 +1,12 @@
 import { auth } from '@/auth'
 import { NextResponse } from 'next/server'
 
-// Routes that don't require authentication
-const PUBLIC_PATHS = ['/login', '/api/auth', '/api/dux/forward']
+// Routes that don't require authentication.
+//
+// `/api/shuk-pedidos` la llama el servidor de Shuk Pedidos, que no tiene sesión
+// de Google: sin esto se comería el redirect al login y el requerimiento nunca
+// llegaría. No queda abierta: la ruta valida su propio secreto compartido.
+const PUBLIC_PATHS = ['/login', '/api/auth', '/api/dux/forward', '/api/shuk-pedidos']
 
 // En `next dev` (localhost) no se pide login de Google: agiliza probar cambios
 // de UI sin depender de las credenciales OAuth.

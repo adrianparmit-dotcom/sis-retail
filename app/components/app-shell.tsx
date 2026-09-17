@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation'
 import {
   ShoppingCart, Package, Truck, BarChart2, ArrowLeftRight,
   Tag, Scissors, MapPin, AlertTriangle, CheckSquare, MoveRight, Wallet, Globe, Boxes,
+  ClipboardList,
 } from 'lucide-react'
 import { NavLink, NavSection } from './nav-link'
 import { PreciosBadge } from './precios-badge'
@@ -67,6 +68,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               con el resto del sistema. */}
           <NavSection label="Ecommerce" />
           <NavLink href="/ecommerce" icon={<Globe size={14} />}>Shuk</NavLink>
+          <NavLink href="/ecommerce/requerimientos" icon={<ClipboardList size={14} />}>Requerimientos</NavLink>
           <NavLink href="/ecommerce/recepciones" icon={<Truck size={14} />}>Recepciones Shuk</NavLink>
 
         </nav>

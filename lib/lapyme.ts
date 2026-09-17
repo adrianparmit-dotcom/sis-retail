@@ -256,6 +256,23 @@ export interface CatalogoGranel {
   padres: Set<string>
   /** `product_id` del padre → sus formatos, ordenados de menor a mayor. */
   formatos: Map<string, FormatoGranel[]>
+  /**
+   * SKU del combo → qué hay que armar.
+   *
+   * Es la entrada que usan los requerimientos de Shuk Pedidos: mandan el SKU
+   * del combo ('GRA-009-3KG') y de ahí sale todo — qué producto es, cuántos
+   * kilos lleva el paquete y qué nombre va en la etiqueta.
+   */
+  porSkuCombo: Map<string, ComboGranel>
+}
+
+/** Un formato de venta, con el producto del que se fracciona. */
+export interface ComboGranel {
+  formato    : FormatoGranel
+  padreId    : string
+  padreSku   : string
+  /** Nombre completo del padre: es el que va en la etiqueta. */
+  padreNombre: string
 }
 
 /**
@@ -301,24 +318,32 @@ export async function catalogoGranel(): Promise<CatalogoGranel> {
   for (const p of granel) if (p.product_type === 'product' && p.sku) padresPorSku.set(p.sku, p)
 
   const formatos = new Map<string, FormatoGranel[]>()
+  const porSkuCombo = new Map<string, ComboGranel>()
   for (const c of granel) {
     if (c.product_type === 'product' || !c.sku) continue
     // 'GRA-009-3KG' y 'GRA-009-BC' cuelgan de 'GRA-009'.
     const skuPadre = c.sku.replace(/-(\d+KG|BC)$/i, '')
     const padre = padresPorSku.get(skuPadre)
     if (!padre) continue
-    const lista = formatos.get(padre.id) ?? []
-    lista.push({
+    const formato: FormatoGranel = {
       sku      : c.sku,
       etiqueta : /-BC$/i.test(c.sku) ? 'Bulto cerrado' : (/-(\d+)KG$/i.exec(c.sku)?.[1] ?? '?') + ' kg',
       kg       : kgDelFormato(c.sku, c.cost ?? 0, padre.cost ?? 0),
       costo    : centavosAPesos(c.cost ?? 0),
-    })
+    }
+    const lista = formatos.get(padre.id) ?? []
+    lista.push(formato)
     formatos.set(padre.id, lista)
+    porSkuCombo.set(c.sku, {
+      formato,
+      padreId    : padre.id,
+      padreSku   : padre.sku ?? skuPadre,
+      padreNombre: padre.name,
+    })
   }
   for (const lista of formatos.values()) lista.sort((a, b) => a.kg - b.kg)
 
-  return { padres: new Set([...padresPorSku.values()].map(p => p.id)), formatos }
+  return { padres: new Set([...padresPorSku.values()].map(p => p.id)), formatos, porSkuCombo }
 }
 
 /** Los importes vienen en centavos. */
