@@ -233,6 +233,19 @@ export const TAG_GRANEL = 'GRANEL'
 export const PROVEEDORES_GRANEL = ['ANKAS DEL SUR']
 
 /**
+ * Desde cuándo tiene sentido pedirle el vencimiento a una compra.
+ *
+ * La línea de granel arrancó en 2026. Ankas tiene una compra de **julio de
+ * 2024** por $3.085.000 que quedó colgada en La Pyme: esa mercadería no existe
+ * más, nadie le va a cargar un vencimiento, y como sale "Faltan 1 de 1" en
+ * ámbar parece trabajo pendiente para siempre.
+ *
+ * Es un corte por año y no un id excluido a propósito: cualquier compra vieja
+ * que aparezca mañana es el mismo caso.
+ */
+export const GRANEL_DESDE = '2026-01-01'
+
+/**
  * Las compras de la línea de granel.
  *
  * `/purchases` no acepta filtrar por `supplier_id` (devuelve 400), pero sí tiene
@@ -255,7 +268,9 @@ export async function comprasDeGranel(limitePorProveedor = 30): Promise<Compra[]
   // Por si dos búsquedas devuelven la misma compra.
   const porId = new Map<string, Compra>()
   for (const c of listas.flat()) porId.set(c.id, c)
-  return [...porId.values()].sort((a, b) => (b.invoice_date ?? '').localeCompare(a.invoice_date ?? ''))
+  return [...porId.values()]
+    .filter(c => (c.invoice_date ?? '') >= GRANEL_DESDE)
+    .sort((a, b) => (b.invoice_date ?? '').localeCompare(a.invoice_date ?? ''))
 }
 
 /** Un producto del catálogo. Solo los campos que se usan para filtrar. */

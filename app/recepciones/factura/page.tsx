@@ -26,7 +26,7 @@ import type { InvoiceLineItem, ParsedFactura, MatchConfidence, ProveedorType, Sk
 import { CLIENT_ID, persistItem, useRecepcionRealtime } from '@/lib/recepcion-collab'
 import { registrarPreciosPendientes, marcarExportados } from '@/lib/precios-pendientes'
 import { SUCURSALES as SUCS, SUCURSALES_DUX } from '@/lib/constants'
-import { tipoComprobanteDux, nroComprobanteDux, discriminaIva, type LetraComprobante } from '@/lib/dux-compra'
+import { tipoComprobanteDux, nroComprobanteDux, discriminaIva, recepcionesConMismoComprobante, type LetraComprobante } from '@/lib/dux-compra'
 import { hoyISO } from '@/lib/format'
 import { recibidoTotal, faltante as faltanteDe, sobrante as sobranteDe } from '@/lib/recepcion-cantidades'
 import { fetchAllFromView } from '@/lib/hooks/use-fetch-all'
@@ -1655,6 +1655,48 @@ export default function RecepcionFacturaPage() {
         '¿Confirmar igual?'
       )
       if (!ok) return
+    }
+
+    // ¿Este comprobante ya se mandó a Dux alguna vez?
+    //
+    // Entre agosto y septiembre de 2026 la misma factura se cargó dos veces en
+    // tres ocasiones (Sedran, Karen Previotto, Shuk): $429.137,16 de deuda que
+    // no existía. Y no se arregla después — **la API de Dux no puede borrar una
+    // compra**, hubo que sacarlas a mano del ERP una por una.
+    //
+    // Es aviso y no bloqueo a propósito: una factura corregida que el proveedor
+    // reemitió con el mismo número es rara pero posible, y dejar a la operaria
+    // sin salida con la mercadería en el mostrador es peor. Se le dice qué
+    // encontró y decide ella.
+    const nroFactura = (factura.nro_comprobante ?? '').trim()
+    if (nroFactura) {
+      let previas: Awaited<ReturnType<typeof recepcionesConMismoComprobante>> = []
+      try {
+        previas = await recepcionesConMismoComprobante(nroFactura, borradorId)
+      } catch {
+        // No se pudo chequear (red, RLS). No se inventa que está limpio ni se
+        // frena la recepción: se avisa y sigue.
+        toast.warning('No pude verificar si este comprobante ya se había enviado a Dux. Revisalo a mano.')
+      }
+      if (previas.length > 0) {
+        const detalle = previas.slice(0, 3).map(p => {
+          const cuando = p.dux_sync_at
+            ? p.dux_sync_at.slice(0, 10).split('-').reverse().join('/')
+            : 's/fecha'
+          const quien = p.proveedor_nombre ?? 'proveedor sin nombre'
+          const monto = p.total_factura != null
+            ? '$' + p.total_factura.toLocaleString('es-AR', { maximumFractionDigits: 0 })
+            : 's/importe'
+          return `• ${p.numero_comprobante} — ${quien} — ${monto} — enviada el ${cuando}`
+        }).join('\n')
+        const ok = window.confirm(
+          `El comprobante ${nroFactura} YA SE ENVIÓ a Dux:\n\n${detalle}\n\n` +
+          'Si es la misma factura, confirmar la carga de nuevo va a duplicar la deuda con el proveedor, ' +
+          'y en Dux no se puede borrar por sistema: hay que sacarla a mano del ERP.\n\n' +
+          '¿Confirmar igual?'
+        )
+        if (!ok) return
+      }
     }
 
     setSaving(true)

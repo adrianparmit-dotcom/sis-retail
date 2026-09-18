@@ -316,3 +316,73 @@ export async function reenviarCompraADux(
   await marcarSync(recepcionId, 'error', motivo)
   return { ok: false, motivo, detalle }
 }
+
+/**
+ * Cómo se compara un número de comprobante para saber si es el mismo papel.
+ *
+ * `0001-90153823` y `00001-90153823` son la MISMA factura de Karen Previotto, y
+ * así entraron dos veces a Dux. Se saca la letra de adelante y los ceros a la
+ * izquierda de cada tramo, que es lo único que cambia según quién la tipeó.
+ */
+export function claveComprobante(nro: string | null | undefined): string {
+  return String(nro ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/^[A-Z]-/, '')
+    .split('-')
+    .map(p => p.replace(/^0+/, ''))
+    .join('-')
+}
+
+export interface RecepcionPrevia {
+  id                : string
+  proveedor_nombre  : string | null
+  numero_comprobante: string | null
+  fecha_factura     : string | null
+  total_factura     : number | null
+  dux_sync_estado   : string | null
+  dux_sync_at       : string | null
+}
+
+/**
+ * Recepciones anteriores que ya mandaron ESTE comprobante a Dux.
+ *
+ * Existe porque la app dejaba cargar dos veces la misma factura sin decir nada.
+ * Entre agosto y septiembre de 2026 pasó tres veces —Sedran, Karen Previotto y
+ * Shuk— por $429.137,16 de deuda que no existía, y hubo que borrarlas a mano
+ * del ERP porque la API de Dux **no tiene endpoint para borrar una compra**:
+ * el módulo Compras solo expone listar y registrar. Todo lo que entra, queda.
+ *
+ * ⚠️ NO se filtra por proveedor. Las dos veces que se duplicó, el nombre estaba
+ * escrito distinto en cada carga (`Algo Dulce` / `KAREN PREVIOTTO`, `Shuk S.R.L`
+ * / `SHUK SRL`): filtrar por proveedor habría dejado pasar justo los casos que
+ * esto tiene que atajar. Se compara por número y se le muestra a la operaria
+ * quién y cuánto, que es lo que le permite decidir.
+ *
+ * Solo cuenta lo que Dux aceptó (`ok`): una recepción que falló o se omitió no
+ * dejó nada en el ERP y volver a mandarla es exactamente lo que se quiere.
+ */
+export async function recepcionesConMismoComprobante(
+  nroComprobante: string,
+  excluirId?: string | null,
+): Promise<RecepcionPrevia[]> {
+  const clave = claveComprobante(nroComprobante)
+  if (!clave) return []
+
+  const { data, error } = await supabase
+    .from('recepciones')
+    .select('id, proveedor_nombre, numero_comprobante, fecha_factura, total_factura, dux_sync_estado, dux_sync_at')
+    .eq('dux_sync_estado', 'ok')
+    .not('numero_comprobante', 'is', null)
+    .order('dux_sync_at', { ascending: false })
+    .limit(1000)
+
+  // Si la consulta falla NO se inventa "no hay duplicados": se deja pasar y que
+  // decida la operaria, pero el error sube para que se vea. Bloquear una
+  // recepción por un problema de red sería peor que el duplicado.
+  if (error) throw error
+
+  return (data ?? [])
+    .filter(r => r.id !== excluirId && claveComprobante(r.numero_comprobante) === clave)
+}
