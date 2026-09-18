@@ -219,6 +219,45 @@ export async function lapymeGetTodo<T>(
 /** La etiqueta con la que Shuk marca la línea de granel en La Pyme. */
 export const TAG_GRANEL = 'GRANEL'
 
+/**
+ * De quién se compra el granel.
+ *
+ * La Pyme es el ERP de TODO Shuk, no solo del granel: al 18/09/2026 tiene 1.497
+ * compras de 35 proveedores —La Francia Panificación 391, Olympic Pro 164,
+ * Andreani, hasta Aguas Santafesinas— y **solo 3 son de Ankas del Sur**. SOHO
+ * administra únicamente el granel, así que el resto acá es ruido.
+ *
+ * Es una lista y no un solo nombre para el día que el granel venga de más de un
+ * proveedor: se agrega el nombre y listo.
+ */
+export const PROVEEDORES_GRANEL = ['ANKAS DEL SUR']
+
+/**
+ * Las compras de la línea de granel.
+ *
+ * `/purchases` no acepta filtrar por `supplier_id` (devuelve 400), pero sí tiene
+ * `search`, que matchea por nombre de proveedor — verificado el 18/09/2026: con
+ * `search=ANKAS` devuelve las 3 compras de Ankas y nada más. Alternativa era
+ * paginar las 15 páginas del ERP y filtrar acá, mucho más lento.
+ *
+ * Si La Pyme falla, el error SUBE y la pantalla lo muestra. No se tapa con una
+ * lista vacía: "no hay compras" y "no pude preguntar" se ven igual en pantalla
+ * pero significan lo opuesto, y quien recibe la mercadería se iría pensando que
+ * la factura todavía no está cargada.
+ */
+export async function comprasDeGranel(limitePorProveedor = 30): Promise<Compra[]> {
+  const listas = await Promise.all(
+    PROVEEDORES_GRANEL.map(nombre =>
+      lapymeGet<LapymeLista<Compra>>('purchases', { search: nombre, limit: limitePorProveedor })
+        .then(r => r.data ?? []),
+    ),
+  )
+  // Por si dos búsquedas devuelven la misma compra.
+  const porId = new Map<string, Compra>()
+  for (const c of listas.flat()) porId.set(c.id, c)
+  return [...porId.values()].sort((a, b) => (b.invoice_date ?? '').localeCompare(a.invoice_date ?? ''))
+}
+
 /** Un producto del catálogo. Solo los campos que se usan para filtrar. */
 export interface ProductoLapyme {
   id: string

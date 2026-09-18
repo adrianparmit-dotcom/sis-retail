@@ -6,6 +6,11 @@
  * La factura se carga en La Pyme, que la parsea con su IA. Acá se traen esas
  * compras y se les pone lo que el ERP no sabe: cuándo vence lo que entró.
  *
+ * Se traen SOLO las compras de granel (ver PROVEEDORES_GRANEL). La Pyme es el
+ * ERP de todo Shuk: al 18/09/2026 tiene 1.497 compras de 35 proveedores y solo
+ * 3 son de Ankas del Sur. Lo demás — La Francia Panificación, Olympic Pro,
+ * Andreani, hasta el agua — no lo administra SOHO.
+ *
  * Mientras una línea no tenga su vencimiento cargado, esa mercadería NO se
  * habilita para la venta. No es una alerta que se pueda ignorar: es la
  * condición para publicar.
@@ -19,8 +24,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatNum, formatDate, hoyISO, toTitleCase } from '@/lib/format'
 import {
-  lapymeGet, LapymeApiError, centavosAPesos,
-  type LapymeLista, type Compra, type CompraDetalle, type CompraItem,
+  lapymeGet, comprasDeGranel, PROVEEDORES_GRANEL, LapymeApiError, centavosAPesos,
+  type Compra, type CompraDetalle, type CompraItem,
 } from '@/lib/lapyme'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 
@@ -54,10 +59,10 @@ export default function RecepcionesEcommercePage() {
   const cargar = useCallback(async () => {
     try {
       const [lista, vencRes] = await Promise.all([
-        lapymeGet<LapymeLista<Compra>>('purchases', { limit: 30 }),
+        comprasDeGranel(),
         supabase.from('ecom_vencimientos').select('*').order('created_at', { ascending: false }),
       ])
-      setCompras(lista.data ?? [])
+      setCompras(lista)
       setVencimientos((vencRes.data ?? []) as Vencimiento[])
       setError(null)
     } catch (err) {
@@ -100,6 +105,20 @@ export default function RecepcionesEcommercePage() {
 
     if (!Number.isFinite(cant) || cant <= 0) { toast.error('Poné cuánto vence en esa fecha'); return }
     if (!b.vence)                            { toast.error('Falta la fecha de vencimiento'); return }
+
+    // El `min` del input es solo un freno del navegador: tipeando a mano la
+    // fecha entra igual. Pasó el 17/09/2026 con un mix que quedó venciendo en
+    // el año 0027 en vez de 2027, y se lleva el FEFO puesto: ese renglón sale
+    // primero en todo y arrastra la etiqueta con una fecha imposible.
+    const anio = Number(b.vence.slice(0, 4))
+    if (!Number.isFinite(anio) || anio < 2000 || anio > 2100) {
+      toast.error(`El año ${b.vence.slice(0, 4)} no puede ser. Revisá la fecha.`)
+      return
+    }
+    if (b.vence < hoyISO()) {
+      toast.error(`Esa fecha ya pasó (${formatDate(b.vence)}). Revisala.`)
+      return
+    }
 
     // Aviso, no bloqueo: la factura puede decir 4 y haber llegado 5, o quedar
     // una parte por cargar en otra fecha. Lo sabe quien está recibiendo.
@@ -223,7 +242,13 @@ export default function RecepcionesEcommercePage() {
       <div>
         <h1 className="text-xl font-semibold text-zinc-900">Recepciones</h1>
         <p className="text-sm text-zinc-500 mt-0.5">
-          Facturas cargadas en La Pyme · acá se les pone el vencimiento
+          Facturas de granel cargadas en La Pyme · acá se les pone el vencimiento
+        </p>
+        <p className="text-xs text-zinc-400 mt-1">
+          {/* La Pyme es el ERP de todo Shuk: tiene ~1.500 compras de 35
+              proveedores. Acá se muestran solo las del granel, que es lo
+              único que administra SOHO. */}
+          Se muestran solo las compras a {PROVEEDORES_GRANEL.join(' y ')} — el resto de las compras de Shuk no se administran desde acá
         </p>
       </div>
 
