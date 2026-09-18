@@ -4,10 +4,11 @@ import { usePathname } from 'next/navigation'
 import {
   ShoppingCart, Package, Truck, BarChart2, ArrowLeftRight,
   Tag, Scissors, MapPin, AlertTriangle, CheckSquare, MoveRight, Wallet, Globe, Boxes,
-  ClipboardList,
+  ClipboardList, Printer,
 } from 'lucide-react'
 import { NavLink, NavSection } from './nav-link'
-import { PreciosBadge } from './precios-badge'
+import { PendientesPanel } from './pendientes-panel'
+import { usePendientes } from './use-pendientes'
 import { AyudaChat } from './ayuda-chat'
 
 // Routes that should NOT show the sidebar
@@ -16,6 +17,9 @@ const NO_SIDEBAR_PATHS = ['/login']
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const hideSidebar = NO_SIDEBAR_PATHS.some((p) => pathname.startsWith(p))
+  // Se cuenta una sola vez acá: los mismos números alimentan el badge del item
+  // y el panel del pie, y tienen que decir lo mismo.
+  const pendientes = usePendientes()
 
   if (hideSidebar) {
     return <>{children}</>
@@ -56,7 +60,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <NavLink href="/caja" icon={<Wallet size={14} />}>Caja</NavLink>
 
           <NavSection label="Góndola" />
-          <PreciosBadge />
+          <NavLink href="/precios" icon={<Printer size={14} />} badge={pendientes.precios}>Precios</NavLink>
           <NavLink href="/precios/blisters" icon={<Boxes size={14} />}>Blisters</NavLink>
 
           <NavSection label="Producción" />
@@ -68,10 +72,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               con el resto del sistema. */}
           <NavSection label="Ecommerce" />
           <NavLink href="/ecommerce" icon={<Globe size={14} />}>Shuk</NavLink>
-          <NavLink href="/ecommerce/requerimientos" icon={<ClipboardList size={14} />}>Requerimientos</NavLink>
+          <NavLink href="/ecommerce/requerimientos" icon={<ClipboardList size={14} />} badge={pendientes.requerimientos}>Requerimientos</NavLink>
           <NavLink href="/ecommerce/recepciones" icon={<Truck size={14} />}>Recepciones Shuk</NavLink>
 
         </nav>
+
+        {/* Lo que llega solo y hay que ver sin buscarlo. */}
+        <PendientesPanel pendientes={pendientes} />
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-zinc-800/60 shrink-0 flex items-center justify-between">

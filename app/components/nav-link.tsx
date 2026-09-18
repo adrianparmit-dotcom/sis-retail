@@ -7,9 +7,11 @@ interface NavLinkProps {
   href: string
   icon: React.ReactNode
   children: React.ReactNode
+  /** Cuántas cosas esperan acá. En 0 no se dibuja nada. */
+  badge?: number
 }
 
-export function NavLink({ href, icon, children }: NavLinkProps) {
+export function NavLink({ href, icon, children, badge = 0 }: NavLinkProps) {
   const pathname = usePathname()
   // Use trailing-slash prefix to avoid /compras matching /compras-extra
   const isActive = pathname === href || pathname.startsWith(href + '/')
@@ -29,6 +31,11 @@ export function NavLink({ href, icon, children }: NavLinkProps) {
         {icon}
       </span>
       {children}
+      {badge > 0 && (
+        <span className="ml-auto flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-orange-500 px-1.5 text-[10px] font-bold text-white leading-none tabular-nums">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </Link>
   )
 }
