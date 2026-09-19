@@ -20,6 +20,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
+import { BotonAvisos } from '@/app/components/boton-avisos'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatNum, formatDate, formatDateTime, hoyISO } from '@/lib/format'
@@ -165,10 +166,15 @@ export default function RequerimientosPage() {
             Lo que Shuk Pedidos manda a armar · el resto del ecommerce lo despacha Shuk
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={cargar} disabled={cargando}>
-          {cargando ? <Loader2 size={13} className="mr-1 animate-spin" /> : null}
-          Actualizar
-        </Button>
+        <div className="flex items-center gap-3">
+          {/* El permiso va por PC, así que el estado se muestra acá y no en un
+              lugar global: quien abre esta pantalla es quien arma los pedidos. */}
+          <BotonAvisos />
+          <Button variant="outline" size="sm" onClick={cargar} disabled={cargando}>
+            {cargando ? <Loader2 size={13} className="mr-1 animate-spin" /> : null}
+            Actualizar
+          </Button>
+        </div>
       </div>
 
       {cargando && reqs.length === 0 && (

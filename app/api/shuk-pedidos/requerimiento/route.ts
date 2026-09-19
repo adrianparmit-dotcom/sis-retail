@@ -33,6 +33,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { horaDeAviso } from '@/lib/aviso-horario'
 
 export const maxDuration = 30
 
@@ -112,6 +113,10 @@ export async function POST(req: NextRequest) {
       pedido,
       fecha_pedido: body.fecha ? String(body.fecha) : null,
       estado      : 'pendiente',
+      // Cuándo mostrar el recuadro en pantalla. Se decide ACÁ y no en el
+      // navegador: un aviso diferido a las 16:15 decidido del lado del cliente
+      // necesitaría que justo a esa hora hubiera una PC con la página abierta.
+      notificar_at: horaDeAviso().toISOString(),
     })
     .select('id')
     .single()

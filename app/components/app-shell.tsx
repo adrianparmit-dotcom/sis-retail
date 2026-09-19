@@ -9,6 +9,7 @@ import {
 import { NavLink, NavSection } from './nav-link'
 import { PendientesPanel } from './pendientes-panel'
 import { usePendientes } from './use-pendientes'
+import { useAvisoPedidos } from './aviso-pedidos'
 import { AyudaChat } from './ayuda-chat'
 
 // Routes that should NOT show the sidebar
@@ -20,6 +21,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Se cuenta una sola vez acá: los mismos números alimentan el badge del item
   // y el panel del pie, y tienen que decir lo mismo.
   const pendientes = usePendientes()
+  // El recuadro del navegador cuando entra un pedido de granel. Va acá y no en
+  // la pantalla de requerimientos porque sirve justamente cuando están en otra.
+  useAvisoPedidos()
 
   if (hideSidebar) {
     return <>{children}</>
