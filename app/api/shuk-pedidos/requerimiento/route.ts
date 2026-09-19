@@ -45,6 +45,27 @@ interface ItemEntrada {
   descripcion?: unknown
 }
 
+/**
+ * El nombre del cliente, venga con la clave que venga.
+ *
+ * Shuk Pedidos es de David y su payload puede cambiar sin que nos enteremos.
+ * Se prueban las grafías razonables en vez de exigir una sola: si ninguna está,
+ * queda en null y la pantalla muestra el número de pedido nomás, que es como
+ * venía funcionando.
+ */
+function nombreCliente(body: Record<string, unknown>): string | null {
+  for (const clave of ['cliente', 'nombre_cliente', 'customer', 'customer_name', 'comprador']) {
+    const v = body[clave]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+    // Tienda Nube manda el cliente como objeto: { customer: { name: "..." } }
+    if (v && typeof v === 'object') {
+      const n = (v as Record<string, unknown>).name ?? (v as Record<string, unknown>).nombre
+      if (typeof n === 'string' && n.trim()) return n.trim()
+    }
+  }
+  return null
+}
+
 function error(codigo: string, mensaje: string, status: number) {
   return NextResponse.json({ error: { codigo, mensaje } }, { status })
 }
@@ -112,6 +133,9 @@ export async function POST(req: NextRequest) {
       id_externo  : idExterno,
       pedido,
       fecha_pedido: body.fecha ? String(body.fecha) : null,
+      cliente     : nombreCliente(body),
+      // El cuerpo entero, para no volver a perder un campo que ya venía.
+      payload     : body,
       estado      : 'pendiente',
       // Cuándo mostrar el recuadro en pantalla. Se decide ACÁ y no en el
       // navegador: un aviso diferido a las 16:15 decidido del lado del cliente

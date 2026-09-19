@@ -40,6 +40,8 @@ interface Requerimiento {
   id: string
   id_externo: string
   pedido: string
+  /** A nombre de quién. Null si Shuk Pedidos no lo manda. */
+  cliente: string | null
   fecha_pedido: string | null
   estado: string
   armado_at: string | null
@@ -60,7 +62,7 @@ export default function RequerimientosPage() {
       const [{ data: rows }, catalogo, { data: vencs }] = await Promise.all([
         supabase
           .from('shuk_requerimientos')
-          .select('id, id_externo, pedido, fecha_pedido, estado, armado_at, created_at, shuk_requerimiento_items(id, sku, cantidad, descripcion, vencimiento)')
+          .select('id, id_externo, pedido, cliente, fecha_pedido, estado, armado_at, created_at, shuk_requerimiento_items(id, sku, cantidad, descripcion, vencimiento)')
           .order('created_at', { ascending: false })
           .limit(50),
         catalogoGranel(),
@@ -73,14 +75,45 @@ export default function RequerimientosPage() {
       ])
 
       type Fila = Omit<Requerimiento, 'items'> & { shuk_requerimiento_items: ItemReq[] }
-      setReqs(((rows ?? []) as Fila[]).map(r => ({ ...r, items: r.shuk_requerimiento_items ?? [] })))
       setCat(catalogo)
 
+      // El vencimiento más próximo habilitado de cada producto padre.
       const mapa = new Map<string, string>()
       for (const v of (vencs ?? []) as { lapyme_product_id: string; fecha_vencimiento: string }[]) {
         if (!mapa.has(v.lapyme_product_id)) mapa.set(v.lapyme_product_id, v.fecha_vencimiento)
       }
       setFefo(mapa)
+
+      // El vencimiento viene PUESTO, no sugerido.
+      //
+      // Antes el FEFO era un link de "usar tal fecha" que había que apretar
+      // renglón por renglón, y el pedido quedaba trabado en "Faltan 2
+      // vencimientos" aunque el sistema supiera perfectamente cuál era.
+      // FEFO no es una opinión: lo que vence primero sale primero, así que es
+      // el valor correcto por defecto. Igual queda editable, que es lo que
+      // importa el día que agarren un bulto de otra partida.
+      const listas = ((rows ?? []) as Fila[]).map(r => ({ ...r, items: r.shuk_requerimiento_items ?? [] }))
+      const aGuardar: { id: string; vencimiento: string }[] = []
+      for (const r of listas) {
+        if (r.estado !== 'pendiente') continue
+        for (const i of r.items) {
+          if (i.vencimiento) continue
+          const sug = catalogo.porSkuCombo.get(i.sku)?.padreId
+          const fecha = sug ? mapa.get(sug) : undefined
+          if (!fecha) continue
+          i.vencimiento = fecha
+          aGuardar.push({ id: i.id, vencimiento: fecha })
+        }
+      }
+      setReqs(listas)
+
+      // Se persiste para que el próximo que abra la pantalla vea lo mismo y
+      // para que el aviso de "faltan vencimientos" diga la verdad. Si falla, la
+      // pantalla ya muestra la fecha igual: se vuelve a intentar al recargar.
+      await Promise.all(aGuardar.map(v =>
+        supabase.from('shuk_requerimiento_items')
+          .update({ vencimiento: v.vencimiento }).eq('id', v.id),
+      ))
     } catch (err) {
       toast.error('No se pudo cargar: ' + (err as Error).message)
     } finally {
@@ -235,6 +268,11 @@ function Tarjeta({ r, cat, fefo, onVenc, onImprimir, onArmado, guardando }: {
     <div className={`rounded-lg border overflow-hidden ${armado ? 'bg-zinc-50 border-zinc-200' : 'bg-white border-indigo-200'}`}>
       <div className={`flex items-center gap-3 px-4 py-2.5 border-b ${armado ? 'bg-zinc-100 border-zinc-200' : 'bg-indigo-50 border-indigo-200'}`}>
         <span className="font-mono text-sm font-medium text-zinc-800">{r.pedido}</span>
+        {r.cliente && (
+          <span className="text-sm text-zinc-700 font-medium truncate max-w-[220px]" title={r.cliente}>
+            {r.cliente}
+          </span>
+        )}
         {armado
           ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px]">Armado</Badge>
           : <Badge className="bg-amber-100 text-amber-700 border-amber-300 text-[10px]">Pendiente</Badge>}
@@ -281,11 +319,21 @@ function Tarjeta({ r, cat, fefo, onVenc, onImprimir, onArmado, guardando }: {
                     i.vencimiento ? 'border-zinc-300' : 'border-amber-500'
                   }`}
                 />
-                {!i.vencimiento && sugerido && (
+                {/* Viene puesto por FEFO, pero se dice de dónde salió: la fecha
+                    la eligió el sistema, no la leyó nadie del bulto. */}
+                {i.vencimiento && sugerido === i.vencimiento && (
+                  <span className="block text-[10px] text-zinc-400 mt-0.5">por FEFO</span>
+                )}
+                {i.vencimiento && sugerido && sugerido !== i.vencimiento && (
                   <button onClick={() => onVenc(r.id, i.id, sugerido)}
                     className="block text-[10px] text-indigo-600 underline mt-0.5">
-                    usar {formatDate(sugerido)}
+                    volver a {formatDate(sugerido)}
                   </button>
+                )}
+                {!i.vencimiento && (
+                  <span className="block text-[10px] text-amber-600 mt-0.5">
+                    {sugerido ? 'cargalo a mano' : 'sin stock con fecha'}
+                  </span>
                 )}
               </div>
 
